@@ -1,0 +1,8 @@
+{
+  "name": "Architect.ai",
+  "description": "An iOS-style AI app builder that generates frontend code from text prompts, uploaded images, or direct sketches on the preview.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
