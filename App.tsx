@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Layout, Smartphone, Code, Play, Plus, Trash2, Menu, Maximize2, Check, Moon, Sun } from 'lucide-react';
+import { Layout, Smartphone, Code, Play, Plus, Trash2, Menu, Maximize2, Check, Moon, Sun, PanelLeftClose } from 'lucide-react';
 import { 
   generateUIUpdate, 
   askArchitect, 
@@ -78,7 +78,11 @@ function App() {
     text: "Hi! I'm Architect. Draw on the screen, use voice, or type to build."
   }]);
   const [isLoading, setIsLoading] = useState(false);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  // Closed by default so phones start on the canvas; opened on desktop after mount
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
+  // Below Tailwind's `lg` (phones, iPad portrait) there is no room for split view
+  const [isCompact, setIsCompact] = useState(false);
   
   // Auto-save State
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'unsaved'>('saved');
@@ -111,6 +115,43 @@ function App() {
   const audioChunksRef = useRef<Blob[]>([]);
 
   const activePage = pages.find(p => p.id === activePageId) || pages[0];
+
+  const effectiveViewMode = isCompact && viewMode === ViewMode.SPLIT ? ViewMode.PREVIEW : viewMode;
+
+  // Track the mobile (`md`) and compact (`lg`) breakpoints
+  useEffect(() => {
+    const mobileMql = window.matchMedia('(max-width: 767px)');
+    const compactMql = window.matchMedia('(max-width: 1023px)');
+    const sync = () => {
+      setIsMobile(mobileMql.matches);
+      setIsCompact(compactMql.matches);
+      setIsSidebarOpen(!compactMql.matches);
+    };
+    sync();
+    mobileMql.addEventListener('change', sync);
+    compactMql.addEventListener('change', sync);
+    return () => {
+      mobileMql.removeEventListener('change', sync);
+      compactMql.removeEventListener('change', sync);
+    };
+  }, []);
+
+  // Size the app to the visible area: on iOS the keyboard and browser chrome
+  // change the visual viewport without updating 100vh.
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const update = () => {
+      // Ignore pinch-zoom, which also shrinks the visual viewport
+      if (vv.scale > 1.01) return;
+      document.documentElement.style.setProperty('--app-height', `${vv.height}px`);
+      // iOS scrolls the page to reveal a focused input; keep the layout pinned
+      if (window.scrollY !== 0) window.scrollTo(0, 0);
+    };
+    update();
+    vv.addEventListener('resize', update);
+    return () => vv.removeEventListener('resize', update);
+  }, []);
 
   // Theme Effect
   useEffect(() => {
@@ -153,10 +194,17 @@ function App() {
       }
     };
     window.addEventListener('resize', updateDimensions);
+    // Catches layout changes such as the mobile chat sheet expanding
+    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(updateDimensions) : null;
+    if (previewContainerRef.current) observer?.observe(previewContainerRef.current);
     updateDimensions();
-    setTimeout(updateDimensions, 100);
-    return () => window.removeEventListener('resize', updateDimensions);
-  }, [viewMode, isSidebarOpen]);
+    const timeoutId = setTimeout(updateDimensions, 350);
+    return () => {
+      window.removeEventListener('resize', updateDimensions);
+      observer?.disconnect();
+      clearTimeout(timeoutId);
+    };
+  }, [effectiveViewMode, isSidebarOpen]);
 
   // --- AUDIO & LIVE API LOGIC ---
 
@@ -380,6 +428,12 @@ function App() {
     };
     setPages([...pages, newPage]);
     setActivePageId(newId);
+    if (isMobile) setIsSidebarOpen(false);
+  };
+
+  const selectPage = (id: string) => {
+    setActivePageId(id);
+    if (isMobile) setIsSidebarOpen(false);
   };
 
   const deletePage = (id: string, e: React.MouseEvent) => {
@@ -391,43 +445,58 @@ function App() {
   };
 
   return (
-    <div className="flex h-screen w-full overflow-hidden bg-apple-gray dark:bg-gray-900 text-apple-dark dark:text-gray-100 font-sans selection:bg-blue-100 selection:text-blue-900 transition-colors duration-300">
-      
-      {/* Sidebar */}
-      <div 
+    <div className="app-height flex w-full overflow-hidden bg-apple-gray dark:bg-gray-900 text-apple-dark dark:text-gray-100 font-sans selection:bg-blue-100 selection:text-blue-900 transition-colors duration-300">
+
+      {/* Mobile sidebar backdrop */}
+      <div
+        onClick={() => setIsSidebarOpen(false)}
+        className={`fixed inset-0 z-40 bg-black/40 backdrop-blur-[2px] transition-opacity duration-300 md:hidden ${
+          isSidebarOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'
+        }`}
+        aria-hidden="true"
+      />
+
+      {/* Sidebar: slide-in drawer on mobile, collapsible column on desktop */}
+      <aside
         className={`${
-          isSidebarOpen ? 'w-64 translate-x-0' : 'w-0 -translate-x-full opacity-0'
-        } bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 flex flex-col transition-all duration-300 ease-in-out absolute md:relative z-40 h-full`}
+          isSidebarOpen ? 'translate-x-0 md:w-64' : '-translate-x-full md:w-0 md:opacity-0'
+        } fixed md:relative inset-y-0 left-0 z-50 md:z-auto w-72 max-w-[85vw] md:max-w-none shrink-0 overflow-hidden bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 flex flex-col shadow-2xl md:shadow-none transition-all duration-300 ease-in-out safe-top safe-left safe-pb`}
+        aria-hidden={!isSidebarOpen}
       >
-        <div className="p-4 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between">
-          <div className="flex items-center space-x-2 font-bold text-gray-800 dark:text-white">
+        <div className="h-14 px-4 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between shrink-0">
+          <div className="flex items-center space-x-2 font-bold text-gray-800 dark:text-white whitespace-nowrap">
             <Layout className="text-blue-600" size={20} />
             <span>Architect.ai</span>
           </div>
-          <button onClick={() => setIsSidebarOpen(false)} className="md:hidden text-gray-500 dark:text-gray-400">
-            <Menu size={20} />
+          <button
+            onClick={() => setIsSidebarOpen(false)}
+            className="p-2 -mr-2 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
+            aria-label="Close sidebar"
+          >
+            <PanelLeftClose size={20} />
           </button>
         </div>
-        
-        <div className="flex-1 overflow-y-auto p-3 space-y-1">
+
+        <div className="flex-1 overflow-y-auto overscroll-contain p-3 space-y-1">
           <div className="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2 px-2 mt-2">Pages</div>
           {pages.map(page => (
-            <div 
+            <div
               key={page.id}
-              onClick={() => setActivePageId(page.id)}
-              className={`group flex items-center justify-between px-3 py-2 rounded-lg cursor-pointer transition-colors text-sm ${
-                activePageId === page.id 
-                  ? 'bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 font-medium' 
+              onClick={() => selectPage(page.id)}
+              className={`group flex items-center justify-between px-3 py-3 md:py-2 rounded-lg cursor-pointer transition-colors text-base md:text-sm ${
+                activePageId === page.id
+                  ? 'bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 font-medium'
                   : 'text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'
               }`}
             >
               <span className="truncate">{page.name}</span>
               {pages.length > 1 && (
-                <button 
+                <button
                   onClick={(e) => deletePage(page.id, e)}
-                  className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-500 dark:hover:text-red-400 transition-opacity"
+                  className="p-1 -mr-1 md:opacity-0 md:group-hover:opacity-100 text-gray-400 hover:text-red-500 dark:hover:text-red-400 transition-opacity"
+                  aria-label={`Delete ${page.name}`}
                 >
-                  <Trash2 size={14} />
+                  <Trash2 size={16} />
                 </button>
               )}
             </div>
@@ -435,32 +504,37 @@ function App() {
         </div>
 
         <div className="p-3 border-t border-gray-100 dark:border-gray-700">
-          <button 
+          <button
             onClick={createNewPage}
-            className="w-full flex items-center justify-center space-x-2 bg-gray-900 dark:bg-black hover:bg-black dark:hover:bg-gray-900 text-white py-2 rounded-xl text-sm font-medium transition-colors shadow-sm"
+            className="w-full flex items-center justify-center space-x-2 bg-gray-900 dark:bg-black hover:bg-black dark:hover:bg-gray-900 text-white py-3 md:py-2 rounded-xl text-sm font-medium transition-colors shadow-sm whitespace-nowrap"
           >
             <Plus size={16} />
             <span>New Page</span>
           </button>
         </div>
-      </div>
+      </aside>
 
       {/* Main Content Area */}
-      <div className="flex-1 flex flex-col relative min-w-0">
-        
+      <div className={`flex-1 flex flex-col relative min-w-0 min-h-0 safe-right ${isSidebarOpen && !isMobile ? '' : 'safe-left'}`}>
+
         {/* Top Navigation Bar */}
-        <header className="h-14 bg-white/50 dark:bg-gray-800/50 backdrop-blur-md border-b border-gray-200 dark:border-gray-700 flex items-center justify-between px-4 z-10">
-          <div className="flex items-center space-x-3">
+        <header className="safe-top shrink-0 bg-white/70 dark:bg-gray-800/70 backdrop-blur-md border-b border-gray-200 dark:border-gray-700 z-10">
+          <div className="h-14 flex items-center justify-between gap-2 px-3 md:px-4">
+          <div className="flex items-center gap-2 md:gap-3 min-w-0">
              {!isSidebarOpen && (
-               <button onClick={() => setIsSidebarOpen(true)} className="p-2 hover:bg-gray-200/50 dark:hover:bg-gray-700/50 rounded-lg text-gray-600 dark:text-gray-300">
+               <button
+                 onClick={() => setIsSidebarOpen(true)}
+                 className="p-2 -ml-1 hover:bg-gray-200/50 dark:hover:bg-gray-700/50 rounded-lg text-gray-600 dark:text-gray-300 shrink-0"
+                 aria-label="Open sidebar"
+               >
                  <Menu size={20} />
                </button>
              )}
-             
+
              {/* Page Title & Save Status */}
-             <div className="flex flex-col">
-               <span className="font-medium text-gray-700 dark:text-gray-200 leading-tight">{activePage.name}</span>
-               <span className="text-[10px] text-gray-400 dark:text-gray-500 flex items-center gap-1">
+             <div className="flex flex-col min-w-0">
+               <span className="font-medium text-gray-700 dark:text-gray-200 leading-tight truncate">{activePage.name}</span>
+               <span className="text-[10px] text-gray-400 dark:text-gray-500 flex items-center gap-1 whitespace-nowrap">
                  {saveStatus === 'saving' ? (
                    <>Saving...</>
                  ) : (
@@ -470,75 +544,82 @@ function App() {
              </div>
 
              {isLiveActive && (
-               <span className="flex items-center text-xs text-red-500 font-semibold bg-red-50 dark:bg-red-900/30 px-2 py-1 rounded-full animate-pulse ml-2">
-                 <div className="w-2 h-2 bg-red-500 rounded-full mr-1"></div>
-                 LIVE SESSION
+               <span className="flex items-center text-xs text-red-500 font-semibold bg-red-50 dark:bg-red-900/30 px-2 py-1 rounded-full animate-pulse shrink-0">
+                 <span className="w-2 h-2 bg-red-500 rounded-full mr-1"></span>
+                 LIVE<span className="hidden sm:inline">&nbsp;SESSION</span>
                </span>
              )}
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1 md:gap-2 shrink-0">
              {/* Theme Toggle */}
              <button
               onClick={toggleTheme}
               className="p-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 transition-colors"
               title={theme === 'dark' ? "Switch to Light Mode" : "Switch to Dark Mode"}
+              aria-label={theme === 'dark' ? "Switch to Light Mode" : "Switch to Dark Mode"}
              >
                {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
              </button>
 
             <div className="flex items-center bg-gray-100 dark:bg-gray-700 p-1 rounded-lg">
-              <button 
+              <button
                 onClick={() => setViewMode(ViewMode.PREVIEW)}
-                className={`p-1.5 rounded-md transition-all ${viewMode === ViewMode.PREVIEW ? 'bg-white dark:bg-gray-600 shadow-sm text-gray-900 dark:text-white' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'}`}
+                className={`p-2 md:p-1.5 rounded-md transition-all ${effectiveViewMode === ViewMode.PREVIEW ? 'bg-white dark:bg-gray-600 shadow-sm text-gray-900 dark:text-white' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'}`}
                 title="Preview"
+                aria-label="Preview"
               >
                 <Smartphone size={16} />
               </button>
-              <button 
+              <button
                 onClick={() => setViewMode(ViewMode.SPLIT)}
-                className={`p-1.5 rounded-md transition-all hidden md:block ${viewMode === ViewMode.SPLIT ? 'bg-white dark:bg-gray-600 shadow-sm text-gray-900 dark:text-white' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'}`}
+                className={`p-1.5 rounded-md transition-all hidden lg:block ${effectiveViewMode === ViewMode.SPLIT ? 'bg-white dark:bg-gray-600 shadow-sm text-gray-900 dark:text-white' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'}`}
                 title="Split View"
+                aria-label="Split View"
               >
                 <Maximize2 size={16} className="rotate-45" />
               </button>
-              <button 
+              <button
                 onClick={() => setViewMode(ViewMode.CODE)}
-                className={`p-1.5 rounded-md transition-all ${viewMode === ViewMode.CODE ? 'bg-white dark:bg-gray-600 shadow-sm text-gray-900 dark:text-white' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'}`}
+                className={`p-2 md:p-1.5 rounded-md transition-all ${effectiveViewMode === ViewMode.CODE ? 'bg-white dark:bg-gray-600 shadow-sm text-gray-900 dark:text-white' : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'}`}
                 title="Code"
+                aria-label="Code"
               >
                 <Code size={16} />
               </button>
             </div>
           </div>
+          </div>
         </header>
 
-        {/* Workspace */}
-        <div className="flex-1 flex overflow-hidden relative">
-          
+        {/* Workspace + chat: stacked on mobile (chat as bottom sheet), side by side on desktop */}
+        <div className="flex-1 flex flex-col md:flex-row min-h-0">
+
+        <div className="flex-1 flex overflow-hidden relative min-h-0 min-w-0">
+
           {/* Preview Panel */}
-          <div 
-            className={`flex-1 relative bg-gray-100 dark:bg-gray-900 transition-all duration-300 flex flex-col items-center justify-center p-4 md:p-8 overflow-hidden
-              ${viewMode === ViewMode.CODE ? 'hidden' : ''}
-              ${viewMode === ViewMode.SPLIT ? 'w-1/2' : 'w-full'}
+          <div
+            className={`flex-1 min-w-0 relative bg-gray-100 dark:bg-gray-900 transition-all duration-300 flex flex-col items-center justify-center p-2 sm:p-4 md:p-8 overflow-hidden
+              ${effectiveViewMode === ViewMode.CODE ? 'hidden' : ''}
+              ${effectiveViewMode === ViewMode.SPLIT ? 'w-1/2' : 'w-full'}
             `}
           >
-             {/* Device Frame */}
-             <div className="relative w-full max-w-[400px] h-full max-h-[850px] bg-white rounded-[3rem] shadow-2xl border-[8px] border-gray-900 overflow-hidden ring-4 ring-gray-200/50 dark:ring-gray-700/50">
+             {/* Device Frame (full-bleed on phones, where the real device is the frame) */}
+             <div className="relative w-full max-w-[400px] h-full md:max-h-[850px] bg-white rounded-2xl md:rounded-[3rem] shadow-lg md:shadow-2xl border border-gray-200 md:border-[8px] md:border-gray-900 overflow-hidden md:ring-4 ring-gray-200/50 dark:ring-gray-700/50">
                 {/* Notch */}
-                <div className="absolute top-0 left-1/2 -translate-x-1/2 w-32 h-6 bg-gray-900 rounded-b-2xl z-50"></div>
-                
+                <div className="hidden md:block absolute top-0 left-1/2 -translate-x-1/2 w-32 h-6 bg-gray-900 rounded-b-2xl z-50"></div>
+
                 {/* Actual App Content Container */}
-                <div 
+                <div
                   ref={previewContainerRef}
-                  className="w-full h-full overflow-y-auto bg-white relative no-scrollbar"
+                  className="w-full h-full overflow-y-auto overscroll-contain bg-white relative no-scrollbar"
                 >
-                  <div 
+                  <div
                      className="w-full min-h-full"
-                     dangerouslySetInnerHTML={{ __html: activePage.code }} 
+                     dangerouslySetInnerHTML={{ __html: activePage.code }}
                   />
 
-                  <CanvasOverlay 
+                  <CanvasOverlay
                     mode={drawMode}
                     settings={drawingSettings}
                     width={previewDimensions.width}
@@ -553,7 +634,7 @@ function App() {
              {/* Drawing Toolbar */}
              {drawMode === DrawMode.DRAWING && (
                <div className="absolute left-8 top-1/2 -translate-y-1/2 z-50 hidden md:block">
-                 <DrawingToolbar 
+                 <DrawingToolbar
                     settings={drawingSettings}
                     onUpdateSettings={setDrawingSettings}
                     onClear={handleClearCanvas}
@@ -563,61 +644,60 @@ function App() {
 
              {/* Mobile Toolbar */}
              {drawMode === DrawMode.DRAWING && (
-               <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-50 md:hidden scale-75 origin-bottom">
-                 <DrawingToolbar 
+               <div className="absolute top-3 left-1/2 -translate-x-1/2 z-50 md:hidden">
+                 <DrawingToolbar
                     settings={drawingSettings}
                     onUpdateSettings={setDrawingSettings}
                     onClear={handleClearCanvas}
+                    orientation="horizontal"
                  />
                </div>
              )}
 
              {drawMode === DrawMode.DRAWING && (
-               <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-black/80 backdrop-blur-sm text-white px-4 py-1 rounded-full text-xs font-medium shadow-lg z-50">
+               <div className="hidden md:block absolute top-4 left-1/2 -translate-x-1/2 bg-black/80 backdrop-blur-sm text-white px-4 py-1 rounded-full text-xs font-medium shadow-lg z-50">
                  Drawing Mode Active
                </div>
              )}
           </div>
 
           {/* Code Panel */}
-          <div 
-             className={`flex-1 bg-[#1e1e1e] overflow-auto border-l border-gray-800 transition-all duration-300
-              ${viewMode === ViewMode.PREVIEW ? 'hidden' : ''}
-              ${viewMode === ViewMode.SPLIT ? 'w-1/2' : 'w-full'}
+          <div
+             className={`flex-1 min-w-0 bg-[#1e1e1e] overflow-auto overscroll-contain border-l border-gray-800 transition-all duration-300
+              ${effectiveViewMode === ViewMode.PREVIEW ? 'hidden' : ''}
+              ${effectiveViewMode === ViewMode.SPLIT ? 'w-1/2' : 'w-full'}
              `}
           >
              <div className="sticky top-0 bg-[#1e1e1e] text-gray-400 text-xs px-4 py-2 border-b border-gray-800 font-mono">
                generated_output.html
              </div>
-             <pre className="p-4 text-sm font-mono text-gray-300 whitespace-pre-wrap">
+             <pre className="p-4 text-xs md:text-sm font-mono text-gray-300 whitespace-pre-wrap break-words">
                {activePage.code}
              </pre>
           </div>
 
+        </div>
+
           {/* Chat Interface */}
-          <div className="absolute right-0 top-0 bottom-0 pointer-events-none flex justify-end">
-             <div className="pointer-events-auto h-full">
-               <ChatInterface 
-                 messages={messages}
-                 onSendMessage={handleSendMessage}
-                 isLoading={isLoading}
-                 isDrawMode={drawMode === DrawMode.DRAWING}
-                 onToggleDrawMode={() => setDrawMode(prev => prev === DrawMode.DRAWING ? DrawMode.NONE : DrawMode.DRAWING)}
-                 pendingImage={pendingSketch}
-                 onClearPendingImage={handleClearCanvas}
-                 
-                 // Voice props
-                 onStartLive={startLiveSession}
-                 onStopLive={stopLiveSession}
-                 isLiveActive={isLiveActive}
-                 onRecordStart={startRecording}
-                 onRecordStop={stopRecording}
-                 isRecording={isRecording}
-                 onSpeak={handleSpeak}
-                 isPlayingAudio={isPlayingAudio}
-               />
-             </div>
-          </div>
+          <ChatInterface
+            messages={messages}
+            onSendMessage={handleSendMessage}
+            isLoading={isLoading}
+            isDrawMode={drawMode === DrawMode.DRAWING}
+            onToggleDrawMode={() => setDrawMode(prev => prev === DrawMode.DRAWING ? DrawMode.NONE : DrawMode.DRAWING)}
+            pendingImage={pendingSketch}
+            onClearPendingImage={handleClearCanvas}
+
+            // Voice props
+            onStartLive={startLiveSession}
+            onStopLive={stopLiveSession}
+            isLiveActive={isLiveActive}
+            onRecordStart={startRecording}
+            onRecordStop={stopRecording}
+            isRecording={isRecording}
+            onSpeak={handleSpeak}
+            isPlayingAudio={isPlayingAudio}
+          />
 
         </div>
       </div>
