@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { Layout, Smartphone, Tablet, Monitor, Code, Play, Plus, Trash2, Menu, Maximize2, Check, Copy, Download, Moon, Sun, PanelLeftClose, ChevronLeft } from 'lucide-react';
+import { Smartphone, Tablet, Monitor, Code, Play, Plus, Trash2, Menu, Maximize2, Check, Copy, Share, Moon, Sun, PanelLeftClose, ChevronLeft } from 'lucide-react';
 import { 
   generateUIUpdate, 
   askArchitect, 
@@ -16,7 +16,10 @@ import { Button } from './components/Button';
 import { LandingPage } from './components/LandingPage';
 import { Dashboard, DashboardTab } from './components/Dashboard';
 import { StarterTemplate } from './data/templates';
-import { buildPreviewDocument, downloadHtml } from './utils/previewDocument';
+import { buildPreviewDocument, shareHtml, sharePages } from './utils/previewDocument';
+import { FullscreenPreview } from './components/FullscreenPreview';
+import { BuildTarget } from './components/PromptBox';
+import { Logo } from './components/Logo';
 import { AppPage, ChatMessage, MessageRole, ViewMode, DrawMode, DrawingSettings, PreviewDevice, Project } from './types';
 import { LiveServerMessage } from '@google/genai';
 
@@ -88,7 +91,7 @@ function App() {
 
   // Landing for first-time visitors, the dashboard for returning ones
   const [screen, setScreen] = useState<'landing' | 'dashboard' | 'editor'>(() => (projects.length ? 'dashboard' : 'landing'));
-  const [dashboardTab, setDashboardTab] = useState<DashboardTab>('home');
+  const [dashboardTab, setDashboardTab] = useState<DashboardTab>('studio');
 
   // Theme State
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
@@ -104,6 +107,8 @@ function App() {
 
   const [previewDevice, setPreviewDevice] = useState<PreviewDevice>('mobile');
   const [codeCopied, setCodeCopied] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const drawerTouchX = useRef<number | null>(null);
 
   const [viewMode, setViewMode] = useState<ViewMode>(ViewMode.SPLIT);
   const [drawMode, setDrawMode] = useState<DrawMode>(DrawMode.NONE);
@@ -176,6 +181,8 @@ function App() {
     setMessages([WELCOME_MESSAGE]);
     setPendingSketch(null);
     setDrawMode(DrawMode.NONE);
+    // Give the preview the full width; the code is one tap away
+    setViewMode(ViewMode.PREVIEW);
     setScreen('editor');
   };
 
@@ -435,7 +442,7 @@ function App() {
   const handleSendMessage = async (
     text: string,
     image?: string,
-    opts: { forceBuild?: boolean; pageId?: string; baseCode?: string } = {}
+    opts: { forceBuild?: boolean; pageId?: string; baseCode?: string; framing?: string } = {}
   ) => {
     const targetPageId = opts.pageId ?? activePageId;
     const baseCode = opts.baseCode ?? activePage.code;
@@ -457,7 +464,8 @@ function App() {
          /change|update|add|remove|style|color|font|layout|button|header|footer|background/i.test(text);
 
       if (isCodeRequest) {
-        const updatedCode = await generateUIUpdate(baseCode, text, imageContext);
+        const request = opts.framing ? `${opts.framing}. ${text}` : text;
+        const updatedCode = await generateUIUpdate(baseCode, request, imageContext);
         setPageCode(targetPageId, updatedCode);
         setMessages(prev => [...prev, {
           id: (Date.now() + 1).toString(),
@@ -512,12 +520,21 @@ function App() {
     if (isMobile) setIsSidebarOpen(false);
   };
 
-  const handleStartPrompt = (text: string, image?: string) => {
+  const handleStartPrompt = (text: string, image?: string, target?: BuildTarget) => {
     const name = text.length > 28 ? `${text.slice(0, 28).trim()}…` : text;
     const baseCode = '<div class="min-h-full grid place-items-center p-10 text-center text-gray-400">Building your page…</div>';
     const pageId = createProject(name || 'Untitled project', { name: 'Home', code: baseCode });
-    setPreviewDevice(/\b(app|mobile|phone|ios|android)\b/i.test(text) ? 'mobile' : 'desktop');
-    handleSendMessage(text, image, { forceBuild: true, pageId, baseCode });
+    const wantsMobile = target ? target === 'app' : /\b(app|mobile|phone|ios|android)\b/i.test(text);
+    setPreviewDevice(wantsMobile ? 'mobile' : 'desktop');
+    // Tell the model what kind of interface to lay out
+    const framing = target === 'app'
+      ? 'Design this as a mobile app screen (phone-first, bottom navigation where it fits)'
+      : target === 'dashboard'
+        ? 'Design this as a data dashboard (cards, charts, tables)'
+        : target === 'website'
+          ? 'Design this as a responsive website'
+          : '';
+    handleSendMessage(text, image, { forceBuild: true, pageId, baseCode, framing });
   };
 
   const handleUseTemplate = (template: StarterTemplate) => {
@@ -526,7 +543,7 @@ function App() {
     setMessages([WELCOME_MESSAGE, {
       id: Date.now().toString(),
       role: MessageRole.MODEL,
-      text: `I've loaded the ${template.label} starting point. Tell me what to change, or draw on the preview.`
+      text: `The ${template.label} blueprint is ready. Tell me what to change, or circle something on the preview.`
     }]);
   };
 
@@ -552,12 +569,16 @@ function App() {
     if (activeProjectId === id) setActiveProjectId(null);
   };
 
-  const exportProject = (id: string) => {
+  const shareProject = (id: string) => {
     const project = projects.find(p => p.id === id);
-    project?.pages.forEach(pg => downloadHtml(pg.code, project.pages.length > 1 ? `${project.name} ${pg.name}` : project.name));
+    if (!project) return;
+    sharePages(
+      project.pages.map(pg => ({ code: pg.code, name: project.pages.length > 1 ? `${project.name} ${pg.name}` : project.name })),
+      project.name
+    );
   };
 
-  const handleExport = () => downloadHtml(activePage.code, activePage.name);
+  const handleShare = () => shareHtml(activePage.code, pages.length > 1 ? `${activeProject.name} ${activePage.name}` : activeProject.name);
 
   const handleCopyCode = async () => {
     try {
@@ -609,7 +630,7 @@ function App() {
         onRenameProject={(id, name) => updateProject(id, () => ({ name }))}
         onDuplicateProject={duplicateProject}
         onDeleteProject={deleteProject}
-        onExportProject={exportProject}
+        onShareProject={shareProject}
         onGoLanding={() => setScreen('landing')}
         theme={theme}
         onToggleTheme={toggleTheme}
@@ -635,6 +656,12 @@ function App() {
           isSidebarOpen ? 'translate-x-0 md:w-64' : '-translate-x-full md:w-0 md:opacity-0'
         } fixed md:relative inset-y-0 left-0 z-50 md:z-auto w-72 max-w-[85vw] md:max-w-none shrink-0 overflow-hidden bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 flex flex-col shadow-2xl md:shadow-none transition-all duration-300 ease-in-out safe-top safe-left safe-pb`}
         aria-hidden={!isSidebarOpen}
+        onTouchStart={(e) => { drawerTouchX.current = e.touches[0].clientX; }}
+        onTouchEnd={(e) => {
+          // Swipe left to close the drawer
+          if (drawerTouchX.current !== null && drawerTouchX.current - e.changedTouches[0].clientX > 60) setIsSidebarOpen(false);
+          drawerTouchX.current = null;
+        }}
       >
         <div className="h-14 px-4 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between shrink-0">
           <button
@@ -642,9 +669,7 @@ function App() {
             className="flex items-center space-x-2 font-bold text-gray-800 dark:text-white whitespace-nowrap"
             title="Back to projects"
           >
-            <Layout className="text-blue-600" size={20} />
-            <span>Architect.ai</span>
-            <span className="text-[10px] font-medium text-gray-400 self-end">Beta</span>
+            <Logo size={24} />
           </button>
           <button
             onClick={() => setIsSidebarOpen(false)}
@@ -692,7 +717,14 @@ function App() {
           ))}
         </div>
 
-        <div className="p-3 border-t border-gray-100 dark:border-gray-700">
+        <div className="p-3 border-t border-gray-100 dark:border-gray-700 space-y-2">
+          <button
+            onClick={toggleTheme}
+            className="md:hidden w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
+          >
+            {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
+            {theme === 'dark' ? 'Light mode' : 'Dark mode'}
+          </button>
           <button
             onClick={createNewPage}
             className="w-full flex items-center justify-center space-x-2 bg-gray-900 dark:bg-black hover:bg-black dark:hover:bg-gray-900 text-white py-3 md:py-2 rounded-xl text-sm font-medium transition-colors shadow-sm whitespace-nowrap"
@@ -743,10 +775,10 @@ function App() {
           </div>
 
           <div className="flex items-center gap-1 md:gap-2 shrink-0">
-             {/* Theme Toggle */}
+             {/* Theme Toggle (in the drawer on phones, to keep the header uncluttered) */}
              <button
               onClick={toggleTheme}
-              className="p-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 transition-colors"
+              className="hidden md:block p-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 transition-colors"
               title={theme === 'dark' ? "Switch to Light Mode" : "Switch to Dark Mode"}
               aria-label={theme === 'dark' ? "Switch to Light Mode" : "Switch to Dark Mode"}
              >
@@ -781,13 +813,22 @@ function App() {
             </div>
 
             <button
-              onClick={handleExport}
-              className="flex items-center gap-1.5 bg-gray-900 dark:bg-white text-white dark:text-gray-900 text-xs font-semibold p-2 md:px-3 md:py-2 rounded-lg hover:opacity-90 transition-opacity"
-              title="Export as HTML"
-              aria-label="Export as HTML"
+              onClick={() => setIsFullscreen(true)}
+              className="p-2 rounded-lg text-gray-600 dark:text-gray-300 hover:bg-gray-200/60 dark:hover:bg-gray-700/60"
+              title="Try it full screen"
+              aria-label="Try it full screen"
             >
-              <Download size={16} className="md:hidden" />
-              <span className="hidden md:inline">Export</span>
+              <Play size={17} />
+            </button>
+
+            <button
+              onClick={handleShare}
+              className="flex items-center gap-1.5 bg-gradient-to-r from-indigo-600 to-violet-600 text-white text-xs font-semibold p-2 md:px-3 md:py-2 rounded-lg hover:opacity-90 transition-opacity"
+              title="Share or export as HTML"
+              aria-label="Share or export as HTML"
+            >
+              <Share size={16} />
+              <span className="hidden md:inline">Share</span>
             </button>
           </div>
           </div>
@@ -950,6 +991,15 @@ function App() {
 
         </div>
       </div>
+
+      {isFullscreen && (
+        <FullscreenPreview
+          code={activePage.code}
+          name={activeProject.name}
+          onClose={() => setIsFullscreen(false)}
+          onShare={handleShare}
+        />
+      )}
     </div>
   );
 }

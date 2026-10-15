@@ -2,92 +2,71 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Layout, Home, LayoutTemplate, FolderOpen, FileUp, Plus, ChevronLeft, ChevronRight, ArrowRight,
-  Info, X, Moon, Sun, MoreHorizontal, Search, HardDrive,
+  Sparkles, Shapes, FolderClosed, Plus, Camera, FileCode2, Square, Moon, Sun, MoreHorizontal, Search,
+  PenTool, Mic, X, ArrowRight, Pencil, Copy, Share, Trash2, ExternalLink, HardDrive,
 } from 'lucide-react';
 import { Project } from '../types';
 import { STARTER_TEMPLATES, StarterTemplate, TemplateCategory } from '../data/templates';
-import { PromptBox } from './PromptBox';
+import { PromptBox, BuildTarget } from './PromptBox';
 import { ScaledPreview } from './ScaledPreview';
+import { BlueprintCard } from './LandingPage';
+import { ActionSheet, SheetAction } from './ActionSheet';
+import { InstallPrompt } from './InstallPrompt';
+import { Logo } from './Logo';
 
-export type DashboardTab = 'home' | 'templates' | 'projects';
+export type DashboardTab = 'studio' | 'blueprints' | 'projects';
 
 interface DashboardProps {
   projects: Project[];
   tab: DashboardTab;
   onTabChange: (tab: DashboardTab) => void;
   onOpenProject: (id: string) => void;
-  onStartPrompt: (text: string, image?: string) => void;
+  onStartPrompt: (text: string, image?: string, target?: BuildTarget) => void;
   onUseTemplate: (template: StarterTemplate) => void;
   onCreateBlank: () => void;
   onImport: (fileName: string, html: string) => void;
   onRenameProject: (id: string, name: string) => void;
   onDuplicateProject: (id: string) => void;
   onDeleteProject: (id: string) => void;
-  onExportProject: (id: string) => void;
+  onShareProject: (id: string) => void;
   onGoLanding: () => void;
   theme: 'light' | 'dark';
   onToggleTheme: () => void;
 }
 
-const WELCOME_DISMISSED_KEY = 'architect_welcome_dismissed_v1';
-const SIDEBAR_COLLAPSED_KEY = 'architect_dashboard_sidebar_collapsed_v1';
+const TIPS_DISMISSED_KEY = 'architect_tips_dismissed_v1';
 
 const timeAgo = (ts: number) => {
   const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
   if (s < 60) return 'just now';
   const m = Math.round(s / 60);
-  if (m < 60) return `${m} min ago`;
+  if (m < 60) return `${m}m ago`;
   const h = Math.round(m / 60);
-  if (h < 24) return `${h} h ago`;
+  if (h < 24) return `${h}h ago`;
   const d = Math.round(h / 24);
-  if (d < 30) return `${d} d ago`;
+  if (d < 30) return `${d}d ago`;
   return new Date(ts).toLocaleDateString();
 };
 
-const readFlag = (key: string) => {
-  try {
-    return localStorage.getItem(key) === '1';
-  } catch {
-    return false;
-  }
-};
-
-const writeFlag = (key: string, value: boolean) => {
-  try {
-    localStorage.setItem(key, value ? '1' : '0');
-  } catch {
-    // Storage unavailable (private mode); the flag just won't persist
-  }
+const greeting = () => {
+  const h = new Date().getHours();
+  if (h < 5) return 'Working late';
+  if (h < 12) return 'Good morning';
+  if (h < 18) return 'Good afternoon';
+  return 'Good evening';
 };
 
 export const Dashboard: React.FC<DashboardProps> = (props) => {
   const { projects, tab, onTabChange, theme, onToggleTheme } = props;
-  const [showWelcome, setShowWelcome] = useState(false);
-  const [collapsed, setCollapsed] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [projectSheet, setProjectSheet] = useState<Project | null>(null);
   const importRef = useRef<HTMLInputElement>(null);
+  const cameraRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    setShowWelcome(!readFlag(WELCOME_DISMISSED_KEY));
-    setCollapsed(readFlag(SIDEBAR_COLLAPSED_KEY));
-  }, []);
 
   useEffect(() => {
     scrollRef.current?.scrollTo(0, 0);
   }, [tab]);
-
-  const dismissWelcome = () => {
-    setShowWelcome(false);
-    writeFlag(WELCOME_DISMISSED_KEY, true);
-  };
-
-  const toggleCollapsed = () => {
-    setCollapsed(prev => {
-      writeFlag(SIDEBAR_COLLAPSED_KEY, !prev);
-      return !prev;
-    });
-  };
 
   const handleImportFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -98,293 +77,319 @@ export const Dashboard: React.FC<DashboardProps> = (props) => {
     reader.readAsText(file);
   };
 
+  // A photo of a paper sketch starts a new project straight away
+  const handleCameraFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onloadend = () =>
+      props.onStartPrompt('Turn this hand-drawn sketch into a polished, responsive page', reader.result as string, 'website');
+    reader.readAsDataURL(file);
+  };
+
+  const createActions: SheetAction[] = [
+    { label: 'Snap a sketch', description: 'Photograph a drawing on paper', icon: <Camera size={20} />, onSelect: () => cameraRef.current?.click() },
+    { label: 'Blank canvas', description: 'Start from an empty page', icon: <Square size={20} />, onSelect: props.onCreateBlank },
+    { label: 'Remix a blueprint', description: 'Pick a ready-made app to reshape', icon: <Shapes size={20} />, onSelect: () => onTabChange('blueprints') },
+    { label: 'Import HTML file', description: 'Bring in a page you already have', icon: <FileCode2 size={20} />, onSelect: () => importRef.current?.click() },
+  ];
+
+  const projectActions: SheetAction[] = projectSheet
+    ? [
+        { label: 'Open', icon: <ExternalLink size={20} />, onSelect: () => props.onOpenProject(projectSheet.id) },
+        {
+          label: 'Rename',
+          icon: <Pencil size={20} />,
+          onSelect: () => {
+            const name = window.prompt('Rename project', projectSheet.name);
+            if (name && name.trim()) props.onRenameProject(projectSheet.id, name.trim());
+          },
+        },
+        { label: 'Duplicate', icon: <Copy size={20} />, onSelect: () => props.onDuplicateProject(projectSheet.id) },
+        { label: 'Share or export', description: 'AirDrop, Messages, Files or download', icon: <Share size={20} />, onSelect: () => props.onShareProject(projectSheet.id) },
+        {
+          label: 'Delete',
+          icon: <Trash2 size={20} />,
+          destructive: true,
+          onSelect: () => {
+            if (window.confirm(`Delete "${projectSheet.name}"? This can't be undone.`)) props.onDeleteProject(projectSheet.id);
+          },
+        },
+      ]
+    : [];
+
   const navItems: { id: DashboardTab; label: string; icon: React.ReactNode }[] = [
-    { id: 'home', label: 'Home', icon: <Home size={18} /> },
-    { id: 'templates', label: 'Templates', icon: <LayoutTemplate size={18} /> },
-    { id: 'projects', label: 'My Projects', icon: <FolderOpen size={18} /> },
+    { id: 'studio', label: 'Studio', icon: <Sparkles size={19} /> },
+    { id: 'blueprints', label: 'Blueprints', icon: <Shapes size={19} /> },
+    { id: 'projects', label: 'Projects', icon: <FolderClosed size={19} /> },
   ];
 
   return (
-    <div className="app-height flex flex-col bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 transition-colors duration-300">
+    <div className="app-height flex bg-[#f7f7fb] dark:bg-gray-950 text-gray-900 dark:text-gray-100 transition-colors duration-300">
       <input ref={importRef} type="file" accept=".html,.htm,text/html" className="hidden" onChange={handleImportFile} />
+      <input ref={cameraRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={handleCameraFile} />
 
-      {/* Welcome banner */}
-      {showWelcome && (
-        <div className="safe-top shrink-0 bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
-          <div className="flex items-start md:items-center gap-3 px-4 py-2.5 text-xs md:text-sm safe-left safe-right">
-            <Info size={16} className="shrink-0 mt-0.5 md:mt-0 text-gray-500" />
-            <p className="flex-1 text-gray-700 dark:text-gray-300">
-              <span className="font-semibold text-gray-900 dark:text-white">Welcome to Architect!</span>{' '}
-              Describe an idea, start from a template or import an HTML file. Your projects are saved in this browser and can be exported any time.
-            </p>
+      {/* Desktop sidebar */}
+      <aside className="hidden md:flex w-60 shrink-0 flex-col bg-[#0B1020] text-indigo-100 safe-top safe-left">
+        <div className="h-16 px-5 flex items-center">
+          <button onClick={props.onGoLanding} title="About Architect">
+            <Logo className="text-white" />
+          </button>
+        </div>
+        <div className="px-4">
+          <button
+            onClick={() => setCreateOpen(true)}
+            className="w-full flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-indigo-500 to-violet-600 text-white text-sm font-semibold py-2.5 shadow-lg shadow-indigo-950/50 hover:opacity-95"
+          >
+            <Plus size={18} /> New
+          </button>
+        </div>
+        <nav className="mt-6 px-3 space-y-1">
+          {navItems.map(item => (
             <button
-              onClick={dismissWelcome}
-              className="shrink-0 flex items-center gap-1 text-xs font-medium border border-gray-300 dark:border-gray-600 rounded-md px-2 py-1 hover:bg-white dark:hover:bg-gray-700"
+              key={item.id}
+              onClick={() => onTabChange(item.id)}
+              className={`w-full flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors ${
+                tab === item.id ? 'bg-white/10 text-white font-medium' : 'text-indigo-100/60 hover:text-white hover:bg-white/5'
+              }`}
             >
-              <X size={12} /> Hide
+              {item.icon}
+              {item.label}
+              {item.id === 'projects' && projects.length > 0 && (
+                <span className="ml-auto text-[11px] rounded-full bg-white/10 px-2 py-0.5">{projects.length}</span>
+              )}
             </button>
+          ))}
+        </nav>
+        <div className="mt-auto p-4 space-y-3 safe-pb">
+          <div className="rounded-xl border border-white/10 p-3 text-xs text-indigo-100/60 flex gap-2">
+            <HardDrive size={16} className="shrink-0" />
+            <span>Projects are saved in this browser. Share or export to keep a copy.</span>
+          </div>
+          <button
+            onClick={onToggleTheme}
+            className="w-full flex items-center gap-3 rounded-lg px-3 py-2 text-sm text-indigo-100/60 hover:text-white hover:bg-white/5"
+          >
+            {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
+            {theme === 'dark' ? 'Light mode' : 'Dark mode'}
+          </button>
+        </div>
+      </aside>
+
+      {/* Main column */}
+      <div className="flex-1 min-w-0 flex flex-col">
+        {/* Mobile header */}
+        <header className="md:hidden shrink-0 safe-top safe-left safe-right bg-[#f7f7fb]/90 dark:bg-gray-950/90 backdrop-blur">
+          <div className="h-14 px-4 flex items-center justify-between">
+            <button onClick={props.onGoLanding}>
+              <Logo />
+            </button>
+            <button
+              onClick={onToggleTheme}
+              className="p-2 text-gray-500"
+              aria-label={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+            >
+              {theme === 'dark' ? <Sun size={19} /> : <Moon size={19} />}
+            </button>
+          </div>
+        </header>
+
+        <main ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto overscroll-contain safe-right">
+          {tab === 'studio' && (
+            <StudioTab
+              {...props}
+              onSnapSketch={() => cameraRef.current?.click()}
+              onImportClick={() => importRef.current?.click()}
+              onProjectMenu={setProjectSheet}
+            />
+          )}
+          {tab === 'blueprints' && <BlueprintsTab onUseTemplate={props.onUseTemplate} />}
+          {tab === 'projects' && <ProjectsTab {...props} onNew={() => setCreateOpen(true)} onProjectMenu={setProjectSheet} />}
+        </main>
+
+        {/* Mobile tab bar with a central create button */}
+        <nav className="md:hidden shrink-0 border-t border-gray-200/80 dark:border-gray-800 bg-white/95 dark:bg-gray-900/95 backdrop-blur safe-pb safe-left safe-right">
+          <div className="grid grid-cols-4 items-end">
+            {navItems.slice(0, 2).map(item => (
+              <TabButton key={item.id} item={item} active={tab === item.id} onClick={() => onTabChange(item.id)} />
+            ))}
+            <div className="flex justify-center">
+              <button
+                onClick={() => setCreateOpen(true)}
+                className="-mt-5 h-14 w-14 rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 text-white grid place-items-center shadow-xl shadow-indigo-500/30 active:scale-95 transition-transform"
+                aria-label="Create"
+              >
+                <Plus size={26} />
+              </button>
+            </div>
+            <TabButton item={navItems[2]} active={tab === 'projects'} onClick={() => onTabChange('projects')} />
+          </div>
+        </nav>
+      </div>
+
+      <ActionSheet open={createOpen} title="Start something new" actions={createActions} onClose={() => setCreateOpen(false)} />
+      <ActionSheet open={!!projectSheet} title={projectSheet?.name} actions={projectActions} onClose={() => setProjectSheet(null)} />
+    </div>
+  );
+};
+
+const TabButton: React.FC<{ item: { label: string; icon: React.ReactNode }; active: boolean; onClick: () => void }> = ({ item, active, onClick }) => (
+  <button
+    onClick={onClick}
+    className={`flex flex-col items-center gap-1 pt-2.5 pb-2 text-[11px] ${active ? 'text-indigo-600 dark:text-indigo-400 font-semibold' : 'text-gray-500'}`}
+  >
+    {item.icon}
+    {item.label}
+  </button>
+);
+
+// --- Studio (home) ---
+
+type ExtraHandlers = {
+  onSnapSketch: () => void;
+  onImportClick: () => void;
+  onProjectMenu: (p: Project) => void;
+};
+
+const StudioTab: React.FC<DashboardProps & ExtraHandlers> = ({
+  projects, onStartPrompt, onOpenProject, onTabChange, onCreateBlank, onSnapSketch, onImportClick, onProjectMenu,
+}) => {
+  const recent = useMemo(() => [...projects].sort((a, b) => b.viewedAt - a.viewedAt).slice(0, 6), [projects]);
+  const [showTips, setShowTips] = useState(false);
+
+  useEffect(() => {
+    try {
+      setShowTips(localStorage.getItem(TIPS_DISMISSED_KEY) !== '1');
+    } catch {
+      setShowTips(true);
+    }
+  }, []);
+
+  const hideTips = () => {
+    setShowTips(false);
+    try {
+      localStorage.setItem(TIPS_DISMISSED_KEY, '1');
+    } catch {
+      // Tips just come back next visit
+    }
+  };
+
+  const quickActions = [
+    { label: 'Snap a sketch', icon: <Camera size={20} />, onClick: onSnapSketch, tint: 'from-rose-500 to-orange-400' },
+    { label: 'Blank canvas', icon: <Square size={20} />, onClick: onCreateBlank, tint: 'from-sky-500 to-indigo-500' },
+    { label: 'Blueprints', icon: <Shapes size={20} />, onClick: () => onTabChange('blueprints'), tint: 'from-violet-500 to-fuchsia-500' },
+    { label: 'Import HTML', icon: <FileCode2 size={20} />, onClick: onImportClick, tint: 'from-emerald-500 to-teal-500' },
+  ];
+
+  return (
+    <div className="max-w-5xl mx-auto px-4 md:px-10 py-6 md:py-14">
+      <p className="text-sm text-gray-500 dark:text-gray-400">
+        {greeting()} · {new Date().toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' })}
+      </p>
+      <h1 className="mt-1 text-3xl md:text-4xl font-bold tracking-tight">What are we building?</h1>
+
+      <PromptBox
+        onSubmit={onStartPrompt}
+        placeholder="An app to split bills with my flatmates…"
+        showTargets
+        align="start"
+        className="mt-6"
+      />
+
+      <div className="mt-8 grid grid-cols-2 md:grid-cols-4 gap-3">
+        {quickActions.map(a => (
+          <button
+            key={a.label}
+            onClick={a.onClick}
+            className="flex items-center gap-3 rounded-2xl bg-white dark:bg-gray-900 border border-gray-200/80 dark:border-gray-800 p-3 text-left text-sm font-medium hover:shadow-md active:scale-[0.98] transition-all"
+          >
+            <span className={`h-10 w-10 shrink-0 rounded-xl bg-gradient-to-br ${a.tint} text-white grid place-items-center`}>{a.icon}</span>
+            {a.label}
+          </button>
+        ))}
+      </div>
+
+      <InstallPrompt className="mt-6 md:hidden" />
+
+      {showTips && (
+        <div className="mt-6 rounded-2xl bg-[#0B1020] text-white p-5 relative overflow-hidden">
+          <button onClick={hideTips} className="absolute top-3 right-3 p-1 text-white/50 hover:text-white" aria-label="Dismiss tips">
+            <X size={16} />
+          </button>
+          <p className="font-mono text-[11px] tracking-[0.2em] text-indigo-300">QUICK TIPS</p>
+          <div className="mt-3 grid sm:grid-cols-3 gap-4 text-sm">
+            <p className="flex gap-2.5"><PenTool size={18} className="shrink-0 text-rose-300" /> Tap “Mark Up” and circle anything on the preview to change it.</p>
+            <p className="flex gap-2.5"><Mic size={18} className="shrink-0 text-indigo-300" /> Hold the mic in the chat to dictate instead of typing.</p>
+            <p className="flex gap-2.5"><Share size={18} className="shrink-0 text-emerald-300" /> Share any page with AirDrop or save it to Files.</p>
           </div>
         </div>
       )}
 
-      <div className="flex-1 flex min-h-0">
-        {/* Desktop sidebar */}
-        <aside
-          className={`hidden md:flex flex-col shrink-0 border-r border-gray-200 dark:border-gray-800 transition-all duration-300 safe-left ${
-            collapsed ? 'w-[68px]' : 'w-64'
-          } ${showWelcome ? '' : 'safe-top'}`}
-        >
-          <div className={`h-16 flex items-center ${collapsed ? 'justify-center' : 'justify-between px-4'}`}>
-            {!collapsed && (
-              <button onClick={props.onGoLanding} className="flex items-center gap-2 font-bold" title="About Architect">
-                <Layout className="text-blue-600" size={22} />
-                <span>Architect.ai</span>
-              </button>
-            )}
-            <button
-              onClick={toggleCollapsed}
-              className="p-1.5 rounded-lg text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800"
-              aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-            >
-              {collapsed ? <ChevronRight size={18} /> : <ChevronLeft size={18} />}
+      {recent.length > 0 && (
+        <section className="mt-10">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold">Pick up where you left off</h2>
+            <button onClick={() => onTabChange('projects')} className="text-sm font-medium text-indigo-600 dark:text-indigo-400 flex items-center gap-1">
+              All projects <ArrowRight size={15} />
             </button>
           </div>
-
-          <nav className="px-3 space-y-1">
-            <SidebarButton collapsed={collapsed} icon={<FileUp size={18} />} label="Import project" onClick={() => importRef.current?.click()} />
-            <div className="h-3" />
-            {navItems.map(item => (
-              <SidebarButton
-                key={item.id}
-                collapsed={collapsed}
-                icon={item.icon}
-                label={item.label}
-                active={tab === item.id}
-                onClick={() => onTabChange(item.id)}
+          <div className="mt-4 -mx-4 px-4 md:mx-0 md:px-0 flex md:grid md:grid-cols-3 gap-4 overflow-x-auto snap-x snap-mandatory no-scrollbar scroll-px-4">
+            {recent.map(p => (
+              <ProjectCard
+                key={p.id}
+                project={p}
+                onOpen={() => onOpenProject(p.id)}
+                onMenu={() => onProjectMenu(p)}
+                className="snap-start shrink-0 w-[72%] sm:w-[45%] md:w-auto"
               />
             ))}
-          </nav>
-
-          <div className="mt-auto p-3 space-y-2 safe-pb">
-            <button
-              onClick={props.onCreateBlank}
-              className={`w-full flex items-center gap-3 rounded-xl border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors text-left ${
-                collapsed ? 'justify-center p-2.5' : 'px-3 py-2.5'
-              }`}
-              title="New blank project"
-            >
-              <Plus size={18} className="text-gray-500 shrink-0" />
-              {!collapsed && (
-                <span className="min-w-0">
-                  <span className="block text-sm font-medium">New project</span>
-                  <span className="block text-xs text-gray-500">Start from a blank page</span>
-                </span>
-              )}
-            </button>
-            <div className={`flex items-center gap-3 rounded-xl px-3 py-2.5 ${collapsed ? 'justify-center' : ''}`}>
-              <HardDrive size={18} className="text-gray-400 shrink-0" />
-              {!collapsed && (
-                <span className="flex-1 min-w-0">
-                  <span className="block text-sm font-medium">Local workspace</span>
-                  <span className="block text-xs text-gray-500">{projects.length} {projects.length === 1 ? 'project' : 'projects'} in this browser</span>
-                </span>
-              )}
-              {!collapsed && (
-                <button
-                  onClick={onToggleTheme}
-                  className="p-1.5 rounded-lg text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800"
-                  aria-label={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
-                >
-                  {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
-                </button>
-              )}
-            </div>
           </div>
-        </aside>
-
-        {/* Main column */}
-        <div className="flex-1 min-w-0 flex flex-col">
-          {/* Mobile header */}
-          <header className={`md:hidden shrink-0 border-b border-gray-100 dark:border-gray-800 safe-left safe-right ${showWelcome ? '' : 'safe-top'}`}>
-            <div className="h-14 px-4 flex items-center justify-between">
-              <button onClick={props.onGoLanding} className="flex items-center gap-2 font-bold">
-                <Layout className="text-blue-600" size={20} />
-                <span>Architect.ai</span>
-              </button>
-              <div className="flex items-center gap-1">
-                <button
-                  onClick={onToggleTheme}
-                  className="p-2 text-gray-500"
-                  aria-label={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
-                >
-                  {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
-                </button>
-                <button onClick={props.onCreateBlank} className="p-2 text-gray-700 dark:text-gray-200" aria-label="New project">
-                  <Plus size={20} />
-                </button>
-              </div>
-            </div>
-          </header>
-
-          <main ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto overscroll-contain safe-right">
-            {tab === 'home' && <HomeTab {...props} />}
-            {tab === 'templates' && <TemplatesTab onUseTemplate={props.onUseTemplate} />}
-            {tab === 'projects' && <ProjectsTab {...props} />}
-          </main>
-
-          {/* Mobile tab bar */}
-          <nav className="md:hidden shrink-0 border-t border-gray-200 dark:border-gray-800 bg-white/95 dark:bg-gray-900/95 backdrop-blur safe-pb safe-left safe-right">
-            <div className="grid grid-cols-4">
-              {navItems.map(item => (
-                <button
-                  key={item.id}
-                  onClick={() => onTabChange(item.id)}
-                  className={`flex flex-col items-center gap-1 pt-2 pb-1.5 text-[11px] ${
-                    tab === item.id ? 'text-blue-600 dark:text-blue-400 font-medium' : 'text-gray-500'
-                  }`}
-                >
-                  {item.icon}
-                  {item.label === 'My Projects' ? 'Projects' : item.label}
-                </button>
-              ))}
-              <button
-                onClick={() => importRef.current?.click()}
-                className="flex flex-col items-center gap-1 pt-2 pb-1.5 text-[11px] text-gray-500"
-              >
-                <FileUp size={18} />
-                Import
-              </button>
-            </div>
-          </nav>
-        </div>
-      </div>
+        </section>
+      )}
     </div>
   );
 };
 
-const SidebarButton: React.FC<{
-  icon: React.ReactNode;
-  label: string;
-  onClick: () => void;
-  active?: boolean;
-  collapsed: boolean;
-}> = ({ icon, label, onClick, active, collapsed }) => (
-  <button
-    onClick={onClick}
-    title={collapsed ? label : undefined}
-    className={`w-full flex items-center gap-3 rounded-lg text-sm transition-colors ${
-      collapsed ? 'justify-center p-2.5' : 'px-3 py-2.5'
-    } ${
-      active
-        ? 'bg-gray-100 dark:bg-gray-800 font-medium text-gray-900 dark:text-white'
-        : 'text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800/60'
-    }`}
-  >
-    <span className="shrink-0">{icon}</span>
-    {!collapsed && <span className="truncate">{label}</span>}
-  </button>
-);
+// --- Blueprints ---
 
-// --- Home ---
+const FILTERS: ('All' | TemplateCategory)[] = ['All', 'Sites', 'Apps', 'Dashboards'];
 
-const HomeTab: React.FC<DashboardProps> = ({ projects, onStartPrompt, onOpenProject, onTabChange, onUseTemplate, ...rest }) => {
-  const recent = useMemo(() => [...projects].sort((a, b) => b.viewedAt - a.viewedAt).slice(0, 3), [projects]);
+const BlueprintsTab: React.FC<{ onUseTemplate: (t: StarterTemplate) => void }> = ({ onUseTemplate }) => {
+  const [filter, setFilter] = useState<'All' | TemplateCategory>('All');
+  const visible = filter === 'All' ? STARTER_TEMPLATES : STARTER_TEMPLATES.filter(t => t.category === filter);
 
   return (
-    <div className="max-w-5xl mx-auto px-4 md:px-8 py-10 md:py-20">
-      <h1 className="text-center text-3xl sm:text-4xl md:text-5xl font-extrabold tracking-tight leading-tight">
-        Build anything{' '}
-        <em className="not-italic md:italic bg-gradient-to-r from-blue-600 to-indigo-500 bg-clip-text text-transparent uppercase">imaginable</em>
-        {' '}with Architect
-      </h1>
-
-      <PromptBox onSubmit={onStartPrompt} placeholder="Build me a very good website" className="mt-8 md:mt-10" />
-
-      <section className="mt-14 md:mt-20">
-        <div className="flex items-end justify-between gap-4">
-          <div>
-            <h2 className="text-xl font-bold">{recent.length ? 'Recently viewed' : 'Start from a template'}</h2>
-            <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
-              {recent.length ? 'Your latest project activity.' : 'Pick a starting point and make it yours.'}
-            </p>
-          </div>
+    <div className="max-w-6xl mx-auto px-4 md:px-10 py-6 md:py-14">
+      <h1 className="text-3xl md:text-4xl font-bold tracking-tight">Blueprints</h1>
+      <p className="mt-1 text-gray-500 dark:text-gray-400">Real, editable apps to remix with words, drawings or your voice.</p>
+      <div className="mt-6 inline-flex rounded-xl bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 p-1 text-sm max-w-full overflow-x-auto no-scrollbar">
+        {FILTERS.map(f => (
           <button
-            onClick={() => onTabChange(recent.length ? 'projects' : 'templates')}
-            className="shrink-0 flex items-center gap-2 text-sm font-medium border border-gray-200 dark:border-gray-700 rounded-xl px-4 py-2.5 hover:bg-gray-50 dark:hover:bg-gray-800"
+            key={f}
+            onClick={() => setFilter(f)}
+            className={`shrink-0 px-3.5 py-1.5 rounded-lg transition-colors ${
+              filter === f ? 'bg-gray-900 dark:bg-white text-white dark:text-gray-900 font-medium' : 'text-gray-500 dark:text-gray-400'
+            }`}
           >
-            Browse all <ArrowRight size={16} />
+            {f}
           </button>
-        </div>
-        <div className="mt-6 grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
-          {recent.length
-            ? recent.map(p => <ProjectCard key={p.id} project={p} onOpen={() => onOpenProject(p.id)} {...rest} />)
-            : STARTER_TEMPLATES.slice(0, 3).map(t => <TemplateCard key={t.id} template={t} onUse={() => onUseTemplate(t)} />)}
-        </div>
-      </section>
-    </div>
-  );
-};
-
-// --- Templates ---
-
-const CATEGORIES: ('All' | TemplateCategory)[] = ['All', 'Website', 'App', 'Dashboard'];
-
-const TemplatesTab: React.FC<{ onUseTemplate: (t: StarterTemplate) => void }> = ({ onUseTemplate }) => {
-  const [category, setCategory] = useState<'All' | TemplateCategory>('All');
-  const visible = category === 'All' ? STARTER_TEMPLATES : STARTER_TEMPLATES.filter(t => t.category === category);
-
-  return (
-    <div className="max-w-6xl mx-auto px-4 md:px-8 py-8 md:py-12">
-      <h1 className="text-2xl font-bold">Templates</h1>
-      <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Starting points you can open, edit with the agent and export.</p>
-
-      <p className="mt-8 text-xs text-gray-400">Categories</p>
-      <div className="mt-2 -mx-4 px-4 md:mx-0 md:px-0 flex gap-3 overflow-x-auto no-scrollbar">
-        {CATEGORIES.map(c => {
-          const count = c === 'All' ? STARTER_TEMPLATES.length : STARTER_TEMPLATES.filter(t => t.category === c).length;
-          return (
-            <button
-              key={c}
-              onClick={() => setCategory(c)}
-              className={`shrink-0 w-40 md:w-48 text-left rounded-xl border px-4 py-3 transition-colors ${
-                category === c
-                  ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/30 dark:border-blue-500'
-                  : 'border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800'
-              }`}
-            >
-              <span className="block text-sm font-medium">{c === 'All' ? 'All templates' : c}</span>
-              <span className="block text-xs text-gray-500 mt-0.5">{count} available</span>
-            </button>
-          );
-        })}
+        ))}
       </div>
-
-      <div className="mt-8 grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
-        {visible.map(t => <TemplateCard key={t.id} template={t} onUse={() => onUseTemplate(t)} />)}
+      <div className="mt-6 grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
+        {visible.map(t => (
+          <BlueprintCard key={t.id} template={t} onRemix={() => onUseTemplate(t)} className="" />
+        ))}
       </div>
     </div>
   );
 };
-
-const TemplateCard: React.FC<{ template: StarterTemplate; onUse: () => void }> = ({ template, onUse }) => (
-  <button onClick={onUse} className="group text-left">
-    <div className="relative aspect-[16/10] rounded-xl overflow-hidden border border-gray-200 dark:border-gray-700 bg-gray-100 shadow-sm group-hover:shadow-md transition-shadow">
-      <ScaledPreview code={template.code} device={template.device === 'mobile' ? 'tablet' : 'desktop'} className="w-full h-full" />
-      <span className="absolute top-2.5 left-2.5 text-[10px] font-semibold lowercase bg-white/90 text-gray-700 rounded-md px-2 py-0.5 shadow-sm">
-        {template.category}
-      </span>
-      <span className="absolute top-2.5 right-2.5 text-[10px] font-semibold bg-gray-900/80 text-white rounded-md px-2 py-0.5">Free</span>
-    </div>
-    <p className="mt-3 text-sm font-semibold">{template.label}</p>
-    <p className="text-xs text-gray-500 dark:text-gray-400 line-clamp-2 mt-0.5">{template.description}</p>
-  </button>
-);
 
 // --- Projects ---
 
-type ProjectActions = Pick<DashboardProps, 'onRenameProject' | 'onDuplicateProject' | 'onDeleteProject' | 'onExportProject'>;
-
-const ProjectsTab: React.FC<DashboardProps> = ({ projects, onOpenProject, onCreateBlank, onTabChange, ...rest }) => {
+const ProjectsTab: React.FC<DashboardProps & { onNew: () => void; onProjectMenu: (p: Project) => void }> = ({
+  projects, onOpenProject, onTabChange, onNew, onProjectMenu,
+}) => {
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<'recent' | 'name'>('recent');
 
@@ -395,136 +400,109 @@ const ProjectsTab: React.FC<DashboardProps> = ({ projects, onOpenProject, onCrea
   }, [projects, query, sort]);
 
   return (
-    <div className="max-w-6xl mx-auto px-4 md:px-8 py-8 md:py-12">
-      <div className="flex flex-wrap items-end justify-between gap-4">
+    <div className="max-w-6xl mx-auto px-4 md:px-10 py-6 md:py-14">
+      <div className="flex items-end justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold">My Projects</h1>
-          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-            {projects.length} {projects.length === 1 ? 'project' : 'projects'} saved in this browser.
+          <h1 className="text-3xl md:text-4xl font-bold tracking-tight">Projects</h1>
+          <p className="mt-1 text-gray-500 dark:text-gray-400">
+            {projects.length} {projects.length === 1 ? 'project' : 'projects'} on this device
           </p>
         </div>
         <button
-          onClick={onCreateBlank}
-          className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold px-4 py-2.5 rounded-xl"
+          onClick={onNew}
+          className="hidden md:flex items-center gap-2 rounded-xl bg-gray-900 dark:bg-white text-white dark:text-gray-900 text-sm font-semibold px-4 py-2.5"
         >
-          <Plus size={16} /> New project
+          <Plus size={16} /> New
         </button>
       </div>
 
-      {projects.length > 0 && (
-        <div className="mt-6 flex flex-wrap items-center gap-3">
-          <label className="flex-1 min-w-[200px] flex items-center gap-2 rounded-xl border border-gray-200 dark:border-gray-700 px-3 focus-within:border-blue-400">
-            <Search size={16} className="text-gray-400" />
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search projects"
-              className="flex-1 bg-transparent py-2.5 text-base md:text-sm focus:outline-none"
-            />
-          </label>
-          <div className="flex items-center rounded-full border border-gray-200 dark:border-gray-700 p-1 text-xs">
-            {(['recent', 'name'] as const).map(s => (
-              <button
-                key={s}
-                onClick={() => setSort(s)}
-                className={`px-3 py-1.5 rounded-full ${sort === s ? 'bg-blue-600 text-white' : 'text-gray-500'}`}
-              >
-                {s === 'recent' ? 'Recent' : 'Name'}
-              </button>
+      {projects.length > 0 ? (
+        <>
+          <div className="mt-6 flex items-center gap-2">
+            <label className="flex-1 flex items-center gap-2 rounded-xl bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 px-3 focus-within:border-indigo-400">
+              <Search size={16} className="text-gray-400" />
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search"
+                type="search"
+                className="flex-1 min-w-0 bg-transparent py-2.5 text-base md:text-sm focus:outline-none"
+              />
+            </label>
+            <button
+              onClick={() => setSort(s => (s === 'recent' ? 'name' : 'recent'))}
+              className="shrink-0 rounded-xl bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 px-3 py-2.5 text-sm"
+            >
+              {sort === 'recent' ? 'Recent' : 'A–Z'}
+            </button>
+          </div>
+          <div className="mt-6 grid grid-cols-2 lg:grid-cols-3 gap-3 md:gap-5">
+            {visible.map(p => (
+              <ProjectCard key={p.id} project={p} onOpen={() => onOpenProject(p.id)} onMenu={() => onProjectMenu(p)} />
             ))}
           </div>
-        </div>
-      )}
-
-      {projects.length === 0 ? (
-        <div className="mt-10 rounded-2xl border border-dashed border-gray-300 dark:border-gray-700 p-10 text-center">
-          <p className="font-medium">No projects yet</p>
-          <p className="text-sm text-gray-500 mt-1">Describe an idea on the Home tab or start from a template.</p>
-          <button onClick={() => onTabChange('templates')} className="mt-4 text-sm font-medium text-blue-600 underline underline-offset-4">
-            Browse templates
-          </button>
-        </div>
+        </>
       ) : (
-        <div className="mt-6 grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
-          {visible.map(p => <ProjectCard key={p.id} project={p} onOpen={() => onOpenProject(p.id)} {...rest} />)}
+        <div className="mt-10 rounded-3xl border-2 border-dashed border-gray-200 dark:border-gray-800 p-10 text-center">
+          <Shapes size={28} className="mx-auto text-indigo-500" />
+          <p className="mt-3 font-semibold">Nothing here yet</p>
+          <p className="text-sm text-gray-500 mt-1">Describe an idea in the Studio, or remix a blueprint.</p>
+          <button onClick={() => onTabChange('blueprints')} className="mt-4 rounded-xl bg-indigo-600 text-white text-sm font-semibold px-4 py-2.5">
+            Browse blueprints
+          </button>
         </div>
       )}
     </div>
   );
 };
 
-const ProjectCard: React.FC<{ project: Project; onOpen: () => void } & ProjectActions> = ({
-  project, onOpen, onRenameProject, onDuplicateProject, onDeleteProject, onExportProject,
+// Long-press (touch) or the ••• button opens the project's action sheet
+const ProjectCard: React.FC<{ project: Project; onOpen: () => void; onMenu: () => void; className?: string }> = ({
+  project, onOpen, onMenu, className = '',
 }) => {
-  const [menuOpen, setMenuOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
+  const pressTimer = useRef<number | null>(null);
+  const longPressed = useRef(false);
 
-  useEffect(() => {
-    if (!menuOpen) return;
-    const close = (e: PointerEvent) => {
-      if (!menuRef.current?.contains(e.target as Node)) setMenuOpen(false);
-    };
-    document.addEventListener('pointerdown', close);
-    return () => document.removeEventListener('pointerdown', close);
-  }, [menuOpen]);
-
-  const run = (fn: () => void) => () => {
-    setMenuOpen(false);
-    fn();
+  const startPress = () => {
+    longPressed.current = false;
+    pressTimer.current = window.setTimeout(() => {
+      longPressed.current = true;
+      onMenu();
+    }, 500);
   };
-
-  const rename = () => {
-    const name = window.prompt('Rename project', project.name);
-    if (name && name.trim()) onRenameProject(project.id, name.trim());
-  };
-
-  const remove = () => {
-    if (window.confirm(`Delete "${project.name}"? This can't be undone.`)) onDeleteProject(project.id);
+  const cancelPress = () => {
+    if (pressTimer.current) window.clearTimeout(pressTimer.current);
   };
 
   return (
-    <div className="group relative">
-      <button onClick={onOpen} className="block w-full text-left">
-        <div className="aspect-[16/10] rounded-xl overflow-hidden border border-gray-200 dark:border-gray-700 bg-gray-100 shadow-sm group-hover:shadow-md transition-shadow">
-          <ScaledPreview code={project.pages[0]?.code || ''} device="desktop" className="w-full h-full" />
-        </div>
+    <div className={`group relative ${className}`}>
+      <button
+        onClick={() => !longPressed.current && onOpen()}
+        onTouchStart={startPress}
+        onTouchEnd={cancelPress}
+        onTouchMove={cancelPress}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          onMenu();
+        }}
+        className="relative block w-full aspect-[4/3] rounded-2xl overflow-hidden bg-white border border-gray-200/80 dark:border-gray-800 shadow-sm group-hover:shadow-lg transition-shadow select-none [-webkit-touch-callout:none]"
+      >
+        <ScaledPreview code={project.pages[0]?.code || ''} device="desktop" className="w-full h-full" />
+        <span className="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-black/70 to-transparent" />
+        <span className="absolute left-3 right-3 bottom-2.5 text-left text-white">
+          <span className="block text-sm font-semibold truncate">{project.name}</span>
+          <span className="block text-[11px] text-white/75">
+            {project.pages.length} {project.pages.length === 1 ? 'page' : 'pages'} · {timeAgo(project.updatedAt)}
+          </span>
+        </span>
       </button>
-      <div className="mt-3 flex items-start justify-between gap-2">
-        <button onClick={onOpen} className="min-w-0 text-left">
-          <p className="text-sm font-semibold truncate">{project.name}</p>
-          <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-            {project.pages.length} {project.pages.length === 1 ? 'page' : 'pages'} · edited {timeAgo(project.updatedAt)}
-          </p>
-        </button>
-        <div ref={menuRef} className="relative shrink-0">
-          <button
-            onClick={() => setMenuOpen(o => !o)}
-            className="p-1.5 rounded-lg text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800"
-            aria-label={`Actions for ${project.name}`}
-            aria-expanded={menuOpen}
-          >
-            <MoreHorizontal size={18} />
-          </button>
-          {menuOpen && (
-            <div className="absolute right-0 bottom-full mb-1 z-20 w-40 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-xl py-1 text-sm">
-              <MenuItem onClick={run(onOpen)}>Open</MenuItem>
-              <MenuItem onClick={run(rename)}>Rename</MenuItem>
-              <MenuItem onClick={run(() => onDuplicateProject(project.id))}>Duplicate</MenuItem>
-              <MenuItem onClick={run(() => onExportProject(project.id))}>Export HTML</MenuItem>
-              <MenuItem onClick={run(remove)} danger>Delete</MenuItem>
-            </div>
-          )}
-        </div>
-      </div>
+      <button
+        onClick={onMenu}
+        className="absolute top-2 right-2 h-8 w-8 grid place-items-center rounded-full bg-white/90 dark:bg-gray-900/90 text-gray-700 dark:text-gray-200 shadow-sm backdrop-blur"
+        aria-label={`Actions for ${project.name}`}
+      >
+        <MoreHorizontal size={16} />
+      </button>
     </div>
   );
 };
-
-const MenuItem: React.FC<{ onClick: () => void; danger?: boolean; children: React.ReactNode }> = ({ onClick, danger, children }) => (
-  <button
-    onClick={onClick}
-    className={`w-full text-left px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-700 ${danger ? 'text-red-600' : ''}`}
-  >
-    {children}
-  </button>
-);

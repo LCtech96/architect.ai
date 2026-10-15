@@ -25,14 +25,46 @@ ${code}
 </body>
 </html>`;
 
+const fileNameFor = (name: string) => `${name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'page'}.html`;
+
 export const downloadHtml = (code: string, name: string) => {
   const blob = new Blob([buildPreviewDocument(code, name)], { type: 'text/html' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `${name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'page'}.html`;
+  a.download = fileNameFor(name);
   document.body.appendChild(a);
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+};
+
+// Opens the native share sheet with the page as an .html file (AirDrop, Messages,
+// Mail, Files on iOS). Falls back to a download where file sharing isn't supported.
+export const shareHtml = async (code: string, name: string) => {
+  const file = new File([buildPreviewDocument(code, name)], fileNameFor(name), { type: 'text/html' });
+  if (navigator.canShare?.({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file], title: name });
+      return;
+    } catch (e: any) {
+      // The user closing the sheet is not an error
+      if (e?.name === 'AbortError') return;
+    }
+  }
+  downloadHtml(code, name);
+};
+
+// Shares every page of a project in one share sheet, or downloads them one by one
+export const sharePages = async (pages: { code: string; name: string }[], title: string) => {
+  const files = pages.map(p => new File([buildPreviewDocument(p.code, p.name)], fileNameFor(p.name), { type: 'text/html' }));
+  if (navigator.canShare?.({ files })) {
+    try {
+      await navigator.share({ files, title });
+      return;
+    } catch (e: any) {
+      if (e?.name === 'AbortError') return;
+    }
+  }
+  pages.forEach(p => downloadHtml(p.code, p.name));
 };
