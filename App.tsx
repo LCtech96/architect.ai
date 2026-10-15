@@ -1,6 +1,6 @@
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Layout, Smartphone, Code, Play, Plus, Trash2, Menu, Maximize2, Check, Moon, Sun, PanelLeftClose } from 'lucide-react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { Layout, Smartphone, Tablet, Monitor, Code, Play, Plus, Trash2, Menu, Maximize2, Check, Copy, Download, Moon, Sun, PanelLeftClose, ChevronLeft } from 'lucide-react';
 import { 
   generateUIUpdate, 
   askArchitect, 
@@ -13,12 +13,16 @@ import { CanvasOverlay } from './components/CanvasOverlay';
 import { DrawingToolbar } from './components/DrawingToolbar';
 import { ChatInterface } from './components/ChatInterface';
 import { Button } from './components/Button';
-import { AppPage, ChatMessage, MessageRole, ViewMode, DrawMode, DrawingSettings } from './types';
+import { LandingPage } from './components/LandingPage';
+import { Dashboard, DashboardTab } from './components/Dashboard';
+import { StarterTemplate } from './data/templates';
+import { buildPreviewDocument, downloadHtml } from './utils/previewDocument';
+import { AppPage, ChatMessage, MessageRole, ViewMode, DrawMode, DrawingSettings, PreviewDevice, Project } from './types';
 import { LiveServerMessage } from '@google/genai';
 
 // Initial Template Code
 const INITIAL_CODE = `
-<div class="flex flex-col items-center justify-center h-full bg-gradient-to-br from-indigo-50 to-blue-50 p-6 text-center">
+<div class="flex flex-col items-center justify-center min-h-full bg-gradient-to-br from-indigo-50 to-blue-50 p-6 text-center">
   <div class="bg-white p-8 rounded-3xl shadow-xl max-w-sm w-full">
     <div class="h-16 w-16 bg-blue-100 text-blue-600 rounded-2xl flex items-center justify-center mx-auto mb-6">
       <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>
@@ -32,31 +36,59 @@ const INITIAL_CODE = `
 </div>
 `;
 
-const LOCAL_STORAGE_KEY = 'architect_pages_v1';
+const PROJECTS_STORAGE_KEY = 'architect_projects_v1';
+// Single-project storage from before projects existed; migrated on first load
+const LEGACY_PAGES_STORAGE_KEY = 'architect_pages_v1';
 const THEME_STORAGE_KEY = 'architect_theme_v1';
+
+const WELCOME_MESSAGE: ChatMessage = {
+  id: 'welcome',
+  role: MessageRole.MODEL,
+  text: "Hi! I'm Architect. Draw on the screen, use voice, or type to build."
+};
+
+const newId = (prefix: string) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+
+const makeProject = (name: string, pages: AppPage[]): Project => {
+  const now = Date.now();
+  return { id: newId('project'), name, pages, createdAt: now, updatedAt: now, viewedAt: now };
+};
+
+const loadProjects = (): Project[] => {
+  if (typeof window === 'undefined') return [];
+  try {
+    const saved = localStorage.getItem(PROJECTS_STORAGE_KEY);
+    if (saved) return JSON.parse(saved);
+    const legacy = localStorage.getItem(LEGACY_PAGES_STORAGE_KEY);
+    if (legacy) {
+      const pages: AppPage[] = JSON.parse(legacy);
+      if (pages.length) return [makeProject('My first project', pages)];
+    }
+  } catch (e) {
+    console.error("Failed to load projects from storage:", e);
+  }
+  return [];
+};
+
+// Imported files may be full documents; keep only what goes inside <body>
+const extractBody = (html: string) => {
+  if (!/<body[\s>]/i.test(html)) return html;
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  doc.querySelectorAll('script[src*="tailwindcss"]').forEach(el => el.remove());
+  return doc.body.innerHTML.trim();
+};
 
 function App() {
   // State
-  const [pages, setPages] = useState<AppPage[]>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
-        if (saved) {
-          return JSON.parse(saved);
-        }
-      } catch (e) {
-        console.error("Failed to load pages from storage:", e);
-      }
-    }
-    return [{ id: 'home', name: 'Home', code: INITIAL_CODE }];
-  });
+  const [projects, setProjects] = useState<Project[]>(loadProjects);
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(() => projects[0]?.id ?? null);
+  const activeProject = projects.find(p => p.id === activeProjectId) || projects[0];
+  const pages = activeProject?.pages ?? [];
+  const [activePageId, setActivePageId] = useState(() => pages[0]?.id ?? '');
 
-  const [activePageId, setActivePageId] = useState(() => {
-     if (typeof window !== 'undefined') {
-       return 'home';
-     }
-     return 'home';
-  });
+  // Landing for first-time visitors, the dashboard for returning ones
+  const [screen, setScreen] = useState<'landing' | 'dashboard' | 'editor'>(() => (projects.length ? 'dashboard' : 'landing'));
+  const [dashboardTab, setDashboardTab] = useState<DashboardTab>('home');
 
   // Theme State
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
@@ -70,13 +102,12 @@ function App() {
     return 'light';
   });
 
+  const [previewDevice, setPreviewDevice] = useState<PreviewDevice>('mobile');
+  const [codeCopied, setCodeCopied] = useState(false);
+
   const [viewMode, setViewMode] = useState<ViewMode>(ViewMode.SPLIT);
   const [drawMode, setDrawMode] = useState<DrawMode>(DrawMode.NONE);
-  const [messages, setMessages] = useState<ChatMessage[]>([{
-    id: 'welcome',
-    role: MessageRole.MODEL,
-    text: "Hi! I'm Architect. Draw on the screen, use voice, or type to build."
-  }]);
+  const [messages, setMessages] = useState<ChatMessage[]>([WELCOME_MESSAGE]);
   const [isLoading, setIsLoading] = useState(false);
   // Closed by default so phones start on the canvas; opened on desktop after mount
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -114,7 +145,49 @@ function App() {
   const recorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
 
-  const activePage = pages.find(p => p.id === activePageId) || pages[0];
+  const activePage: AppPage = pages.find(p => p.id === activePageId) || pages[0] || { id: '', name: '', code: '' };
+  const previewDoc = useMemo(() => buildPreviewDocument(activePage.code, activePage.name), [activePage.code, activePage.name]);
+
+  // --- PROJECT STATE HELPERS ---
+
+  const updateProject = (id: string, change: (p: Project) => Partial<Project>) => {
+    setProjects(prev => prev.map(p => (p.id === id ? { ...p, ...change(p), updatedAt: Date.now() } : p)));
+  };
+
+  const setActivePages = (change: (pages: AppPage[]) => AppPage[]) => {
+    if (activeProject) updateProject(activeProject.id, p => ({ pages: change(p.pages) }));
+  };
+
+  // Page ids are unique across projects, so this also lands correctly when the
+  // user has switched projects while a generation was in flight
+  const setPageCode = (pageId: string, code: string) => {
+    setProjects(prev => prev.map(p =>
+      p.pages.some(pg => pg.id === pageId)
+        ? { ...p, updatedAt: Date.now(), pages: p.pages.map(pg => (pg.id === pageId ? { ...pg, code } : pg)) }
+        : p
+    ));
+  };
+
+  const openProject = (id: string, project = projects.find(p => p.id === id)) => {
+    if (!project) return;
+    setActiveProjectId(id);
+    setActivePageId(project.pages[0]?.id ?? '');
+    setProjects(prev => prev.map(p => (p.id === id ? { ...p, viewedAt: Date.now() } : p)));
+    setMessages([WELCOME_MESSAGE]);
+    setPendingSketch(null);
+    setDrawMode(DrawMode.NONE);
+    setScreen('editor');
+  };
+
+  // Adds a project and opens it in the editor; returns the first page's id
+  const createProject = (name: string, firstPage: Omit<AppPage, 'id'>) => {
+    const page: AppPage = { id: newId('page'), ...firstPage };
+    const project = makeProject(name, [page]);
+    setProjects(prev => [project, ...prev]);
+    openProject(project.id, project);
+    return page.id;
+  };
+
 
   const effectiveViewMode = isCompact && viewMode === ViewMode.SPLIT ? ViewMode.PREVIEW : viewMode;
 
@@ -173,16 +246,16 @@ function App() {
     setSaveStatus('saving');
     const timeoutId = setTimeout(() => {
       try {
-        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(pages));
+        localStorage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(projects));
         setSaveStatus('saved');
       } catch (error) {
-        console.error("Failed to save pages:", error);
+        console.error("Failed to save projects:", error);
         setSaveStatus('unsaved');
       }
     }, 2000); // Debounce save by 2 seconds
 
     return () => clearTimeout(timeoutId);
-  }, [pages]);
+  }, [projects]);
 
   useEffect(() => {
     const updateDimensions = () => {
@@ -357,7 +430,15 @@ function App() {
 
   // --- CHAT & LOGIC ---
 
-  const handleSendMessage = async (text: string, image?: string) => {
+  // `forceBuild` sends the request straight to code generation; `pageId`/`baseCode`
+  // target a page created in the same tick, before state has updated.
+  const handleSendMessage = async (
+    text: string,
+    image?: string,
+    opts: { forceBuild?: boolean; pageId?: string; baseCode?: string } = {}
+  ) => {
+    const targetPageId = opts.pageId ?? activePageId;
+    const baseCode = opts.baseCode ?? activePage.code;
     const newMessage: ChatMessage = {
       id: Date.now().toString(),
       role: MessageRole.USER,
@@ -371,12 +452,13 @@ function App() {
     try {
       const imageContext = image || pendingSketch || undefined;
       const isCodeRequest = 
+         opts.forceBuild ||
          imageContext || 
          /change|update|add|remove|style|color|font|layout|button|header|footer|background/i.test(text);
 
       if (isCodeRequest) {
-        const updatedCode = await generateUIUpdate(activePage.code, text, imageContext);
-        setPages(prev => prev.map(p => p.id === activePageId ? { ...p, code: updatedCode } : p));
+        const updatedCode = await generateUIUpdate(baseCode, text, imageContext);
+        setPageCode(targetPageId, updatedCode);
         setMessages(prev => [...prev, {
           id: (Date.now() + 1).toString(),
           role: MessageRole.MODEL,
@@ -420,15 +502,71 @@ function App() {
   };
 
   const createNewPage = () => {
-    const newId = `page-${Date.now()}`;
-    const newPage: AppPage = {
-      id: newId,
+    const page: AppPage = {
+      id: newId('page'),
       name: `Page ${pages.length + 1}`,
       code: '<div class="p-10 text-center text-gray-400">New Page</div>'
     };
-    setPages([...pages, newPage]);
-    setActivePageId(newId);
+    setActivePages(prev => [...prev, page]);
+    setActivePageId(page.id);
     if (isMobile) setIsSidebarOpen(false);
+  };
+
+  const handleStartPrompt = (text: string, image?: string) => {
+    const name = text.length > 28 ? `${text.slice(0, 28).trim()}…` : text;
+    const baseCode = '<div class="min-h-full grid place-items-center p-10 text-center text-gray-400">Building your page…</div>';
+    const pageId = createProject(name || 'Untitled project', { name: 'Home', code: baseCode });
+    setPreviewDevice(/\b(app|mobile|phone|ios|android)\b/i.test(text) ? 'mobile' : 'desktop');
+    handleSendMessage(text, image, { forceBuild: true, pageId, baseCode });
+  };
+
+  const handleUseTemplate = (template: StarterTemplate) => {
+    createProject(template.label, { name: 'Home', code: template.code });
+    setPreviewDevice(template.device);
+    setMessages([WELCOME_MESSAGE, {
+      id: Date.now().toString(),
+      role: MessageRole.MODEL,
+      text: `I've loaded the ${template.label} starting point. Tell me what to change, or draw on the preview.`
+    }]);
+  };
+
+  const handleCreateBlank = () => {
+    createProject('Untitled project', { name: 'Home', code: INITIAL_CODE });
+    setPreviewDevice('mobile');
+  };
+
+  const handleImport = (fileName: string, html: string) => {
+    createProject(fileName || 'Imported project', { name: 'Home', code: extractBody(html) });
+    setPreviewDevice('desktop');
+  };
+
+  const duplicateProject = (id: string) => {
+    const source = projects.find(p => p.id === id);
+    if (!source) return;
+    const copy = makeProject(`${source.name} copy`, source.pages.map(pg => ({ ...pg, id: newId('page') })));
+    setProjects(prev => [copy, ...prev]);
+  };
+
+  const deleteProject = (id: string) => {
+    setProjects(prev => prev.filter(p => p.id !== id));
+    if (activeProjectId === id) setActiveProjectId(null);
+  };
+
+  const exportProject = (id: string) => {
+    const project = projects.find(p => p.id === id);
+    project?.pages.forEach(pg => downloadHtml(pg.code, project.pages.length > 1 ? `${project.name} ${pg.name}` : project.name));
+  };
+
+  const handleExport = () => downloadHtml(activePage.code, activePage.name);
+
+  const handleCopyCode = async () => {
+    try {
+      await navigator.clipboard.writeText(activePage.code);
+      setCodeCopied(true);
+      setTimeout(() => setCodeCopied(false), 1500);
+    } catch (e) {
+      console.error('Copy failed', e);
+    }
   };
 
   const selectPage = (id: string) => {
@@ -440,9 +578,44 @@ function App() {
     e.stopPropagation();
     if (pages.length <= 1) return;
     const newPages = pages.filter(p => p.id !== id);
-    setPages(newPages);
+    setActivePages(() => newPages);
     if (activePageId === id) setActivePageId(newPages[0].id);
   };
+
+  if (screen === 'landing') {
+    return (
+      <LandingPage
+        onStartPrompt={handleStartPrompt}
+        onUseTemplate={handleUseTemplate}
+        onOpenEditor={() => setScreen('dashboard')}
+        hasProject={projects.length > 0}
+        theme={theme}
+        onToggleTheme={toggleTheme}
+      />
+    );
+  }
+
+  if (screen === 'dashboard' || !activeProject) {
+    return (
+      <Dashboard
+        projects={projects}
+        tab={dashboardTab}
+        onTabChange={setDashboardTab}
+        onOpenProject={(id) => openProject(id)}
+        onStartPrompt={handleStartPrompt}
+        onUseTemplate={handleUseTemplate}
+        onCreateBlank={handleCreateBlank}
+        onImport={handleImport}
+        onRenameProject={(id, name) => updateProject(id, () => ({ name }))}
+        onDuplicateProject={duplicateProject}
+        onDeleteProject={deleteProject}
+        onExportProject={exportProject}
+        onGoLanding={() => setScreen('landing')}
+        theme={theme}
+        onToggleTheme={toggleTheme}
+      />
+    );
+  }
 
   return (
     <div className="app-height flex w-full overflow-hidden bg-apple-gray dark:bg-gray-900 text-apple-dark dark:text-gray-100 font-sans selection:bg-blue-100 selection:text-blue-900 transition-colors duration-300">
@@ -464,10 +637,15 @@ function App() {
         aria-hidden={!isSidebarOpen}
       >
         <div className="h-14 px-4 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between shrink-0">
-          <div className="flex items-center space-x-2 font-bold text-gray-800 dark:text-white whitespace-nowrap">
+          <button
+            onClick={() => setScreen('dashboard')}
+            className="flex items-center space-x-2 font-bold text-gray-800 dark:text-white whitespace-nowrap"
+            title="Back to projects"
+          >
             <Layout className="text-blue-600" size={20} />
             <span>Architect.ai</span>
-          </div>
+            <span className="text-[10px] font-medium text-gray-400 self-end">Beta</span>
+          </button>
           <button
             onClick={() => setIsSidebarOpen(false)}
             className="p-2 -mr-2 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
@@ -478,6 +656,17 @@ function App() {
         </div>
 
         <div className="flex-1 overflow-y-auto overscroll-contain p-3 space-y-1">
+          <button
+            onClick={() => setScreen('dashboard')}
+            className="w-full flex items-center gap-2 px-2 py-2 text-sm text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white"
+          >
+            <ChevronLeft size={16} />
+            All projects
+          </button>
+          <div className="px-2 pt-2 pb-3 border-b border-gray-100 dark:border-gray-700 mb-2">
+            <div className="text-xs text-gray-400 dark:text-gray-500">Project</div>
+            <div className="font-semibold text-gray-800 dark:text-gray-100 truncate" title={activeProject.name}>{activeProject.name}</div>
+          </div>
           <div className="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2 px-2 mt-2">Pages</div>
           {pages.map(page => (
             <div
@@ -533,8 +722,10 @@ function App() {
 
              {/* Page Title & Save Status */}
              <div className="flex flex-col min-w-0">
-               <span className="font-medium text-gray-700 dark:text-gray-200 leading-tight truncate">{activePage.name}</span>
+               <span className="font-medium text-gray-700 dark:text-gray-200 leading-tight truncate">{activeProject.name}</span>
                <span className="text-[10px] text-gray-400 dark:text-gray-500 flex items-center gap-1 whitespace-nowrap">
+                 <span className="truncate max-w-[8rem]">{activePage.name}</span>
+                 <span aria-hidden="true">·</span>
                  {saveStatus === 'saving' ? (
                    <>Saving...</>
                  ) : (
@@ -588,6 +779,16 @@ function App() {
                 <Code size={16} />
               </button>
             </div>
+
+            <button
+              onClick={handleExport}
+              className="flex items-center gap-1.5 bg-gray-900 dark:bg-white text-white dark:text-gray-900 text-xs font-semibold p-2 md:px-3 md:py-2 rounded-lg hover:opacity-90 transition-opacity"
+              title="Export as HTML"
+              aria-label="Export as HTML"
+            >
+              <Download size={16} className="md:hidden" />
+              <span className="hidden md:inline">Export</span>
+            </button>
           </div>
           </div>
         </header>
@@ -604,22 +805,63 @@ function App() {
               ${effectiveViewMode === ViewMode.SPLIT ? 'w-1/2' : 'w-full'}
             `}
           >
-             {/* Device Frame (full-bleed on phones, where the real device is the frame) */}
-             <div className="relative w-full max-w-[400px] h-full md:max-h-[850px] bg-white rounded-2xl md:rounded-[3rem] shadow-lg md:shadow-2xl border border-gray-200 md:border-[8px] md:border-gray-900 overflow-hidden md:ring-4 ring-gray-200/50 dark:ring-gray-700/50">
-                {/* Notch */}
-                <div className="hidden md:block absolute top-0 left-1/2 -translate-x-1/2 w-32 h-6 bg-gray-900 rounded-b-2xl z-50"></div>
+             {/* Device size picker (desktop only; on a phone the real device is the frame) */}
+             <div className="hidden md:flex items-center gap-1 mb-4 shrink-0 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-full p-1 shadow-sm z-10">
+               {([
+                 ['mobile', Smartphone, 'Mobile'],
+                 ['tablet', Tablet, 'Tablet'],
+                 ['desktop', Monitor, 'Desktop'],
+               ] as const).map(([device, Icon, label]) => (
+                 <button
+                   key={device}
+                   onClick={() => setPreviewDevice(device)}
+                   className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full transition-colors ${
+                     previewDevice === device
+                       ? 'bg-gray-900 dark:bg-white text-white dark:text-gray-900 font-medium'
+                       : 'text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200'
+                   }`}
+                   aria-pressed={previewDevice === device}
+                 >
+                   <Icon size={14} />
+                   <span className="hidden lg:inline">{label}</span>
+                 </button>
+               ))}
+             </div>
 
-                {/* Actual App Content Container */}
-                <div
+             {/* Device Frame (full-bleed on phones, where the real device is the frame) */}
+             <div className={`relative w-full flex-1 min-h-0 bg-white overflow-hidden shadow-lg md:shadow-2xl rounded-2xl border border-gray-200 transition-all duration-300 ${
+               previewDevice === 'mobile'
+                 ? 'max-w-[400px] md:max-h-[850px] md:rounded-[3rem] md:border-[8px] md:border-gray-900 md:ring-4 ring-gray-200/50 dark:ring-gray-700/50'
+                 : previewDevice === 'tablet'
+                   ? 'max-w-[400px] md:max-w-[820px] md:max-h-[1180px] md:rounded-[2rem] md:border-[10px] md:border-gray-900'
+                   : 'max-w-[400px] md:max-w-none md:rounded-xl md:border-gray-300 dark:md:border-gray-700 md:pt-8'
+             }`}>
+                {/* Notch / browser bar */}
+                {previewDevice === 'mobile' && (
+                  <div className="hidden md:block absolute top-0 left-1/2 -translate-x-1/2 w-32 h-6 bg-gray-900 rounded-b-2xl z-30"></div>
+                )}
+                {previewDevice === 'desktop' && (
+                  <div className="hidden md:flex absolute top-0 inset-x-0 h-8 items-center gap-1.5 px-3 bg-gray-100 border-b border-gray-200 z-30">
+                    <span className="h-2.5 w-2.5 rounded-full bg-red-400"></span>
+                    <span className="h-2.5 w-2.5 rounded-full bg-yellow-400"></span>
+                    <span className="h-2.5 w-2.5 rounded-full bg-green-400"></span>
+                    <span className="ml-3 flex-1 max-w-xs h-5 rounded-md bg-white text-[10px] text-gray-400 flex items-center px-2 truncate">{activePage.name}</span>
+                  </div>
+                )}
+                
+                {/* Actual App Content: a sandboxed iframe, so Tailwind breakpoints follow the frame width */}
+                <div 
                   ref={previewContainerRef}
-                  className="w-full h-full overflow-y-auto overscroll-contain bg-white relative no-scrollbar"
+                  className="w-full h-full relative"
                 >
-                  <div
-                     className="w-full min-h-full"
-                     dangerouslySetInnerHTML={{ __html: activePage.code }}
+                  <iframe
+                    title={`${activePage.name} preview`}
+                    srcDoc={previewDoc}
+                    sandbox="allow-scripts allow-forms allow-popups"
+                    className="w-full h-full border-0 bg-white"
                   />
 
-                  <CanvasOverlay
+                  <CanvasOverlay 
                     mode={drawMode}
                     settings={drawingSettings}
                     width={previewDimensions.width}
@@ -668,8 +910,15 @@ function App() {
               ${effectiveViewMode === ViewMode.SPLIT ? 'w-1/2' : 'w-full'}
              `}
           >
-             <div className="sticky top-0 bg-[#1e1e1e] text-gray-400 text-xs px-4 py-2 border-b border-gray-800 font-mono">
-               generated_output.html
+             <div className="sticky top-0 bg-[#1e1e1e] text-gray-400 text-xs px-4 py-2 border-b border-gray-800 font-mono flex items-center justify-between gap-2">
+               <span className="truncate">generated_output.html</span>
+               <button
+                 onClick={handleCopyCode}
+                 className="flex items-center gap-1 font-sans text-gray-400 hover:text-white px-2 py-1 rounded hover:bg-white/10 transition-colors"
+               >
+                 {codeCopied ? <Check size={12} /> : <Copy size={12} />}
+                 {codeCopied ? 'Copied' : 'Copy'}
+               </button>
              </div>
              <pre className="p-4 text-xs md:text-sm font-mono text-gray-300 whitespace-pre-wrap break-words">
                {activePage.code}
