@@ -7,6 +7,9 @@
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="Architect" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
     <meta name="theme-color" content="#F5F5F7" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#111827" media="(prefers-color-scheme: dark)" />
     <title>Architect.ai</title>
@@ -70,6 +73,28 @@
       @media (min-width: 768px) {
         .safe-bottom { padding-bottom: max(1rem, env(safe-area-inset-bottom)); }
       }
+      /* Bottom sheets and overlays */
+      @keyframes sheet-up { from { transform: translateY(100%); } to { transform: translateY(0); } }
+      @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+      @keyframes pop-in { from { opacity: 0; transform: scale(.96); } to { opacity: 1; transform: scale(1); } }
+      .animate-sheet-up { animation: sheet-up .28s cubic-bezier(.2,.8,.2,1); }
+      .animate-fade-in { animation: fade-in .2s ease-out; }
+      .animate-pop-in { animation: pop-in .2s ease-out; }
+      @media (prefers-reduced-motion: reduce) {
+        .animate-sheet-up, .animate-fade-in, .animate-pop-in { animation: none; }
+      }
+      /* Blueprint grid used by the landing hero */
+      .bg-blueprint {
+        background-color: #0B1020;
+        background-image:
+          linear-gradient(rgba(129, 140, 248, .09) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(129, 140, 248, .09) 1px, transparent 1px),
+          linear-gradient(rgba(129, 140, 248, .04) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(129, 140, 248, .04) 1px, transparent 1px);
+        background-size: 96px 96px, 96px 96px, 24px 24px, 24px 24px;
+      }
+      .snap-x-mandatory { scroll-snap-type: x mandatory; -webkit-overflow-scrolling: touch; }
+      .snap-start { scroll-snap-align: start; }
       .no-scrollbar {
         -ms-overflow-style: none;
         scrollbar-width: none;

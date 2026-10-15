@@ -4,11 +4,10 @@ export enum MessageRole {
   MODEL = 'model'
 }
 
+// A web source cited by a search-grounded answer
 export interface GroundingMetadata {
-  web?: {
-    uri: string;
-    title: string;
-  };
+  uri: string;
+  title?: string;
 }
 
 export interface ChatMessage {
@@ -49,4 +48,15 @@ export interface DrawingSettings {
   tool: DrawingToolType;
   color: string;
   width: number;
+}
+
+export type PreviewDevice = 'mobile' | 'tablet' | 'desktop';
+
+export interface Project {
+  id: string;
+  name: string;
+  pages: AppPage[];
+  createdAt: number;
+  updatedAt: number;
+  viewedAt: number;
 }

@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Image as ImageIcon, PenTool, X, Mic, AudioLines, Volume2, Globe, ChevronUp, ChevronDown } from 'lucide-react';
+import { Send, Image as ImageIcon, PenTool, X, Mic, AudioLines, Volume2, Globe, ChevronUp, ChevronDown, Camera } from 'lucide-react';
 import { Button } from './Button';
 import { ChatMessage, MessageRole } from '../types';
 
@@ -45,6 +45,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const [inputText, setInputText] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+  const sheetTouchY = useRef<number | null>(null);
   const [uploadedImage, setUploadedImage] = useState<string | null>(null);
   // Mobile only: the chat is a bottom sheet that can be collapsed to just the composer
   const [isExpanded, setIsExpanded] = useState(false);
@@ -106,10 +108,32 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const activeImage = pendingImage || uploadedImage;
   const lastMessage = messages[messages.length - 1];
 
+  // Mobile sheet: swipe up on the header to open the conversation, down to close
+  const handleSheetTouchEnd = (e: React.TouchEvent) => {
+    if (sheetTouchY.current === null) return;
+    const dy = e.changedTouches[0].clientY - sheetTouchY.current;
+    sheetTouchY.current = null;
+    if (dy < -30) setIsExpanded(true);
+    else if (dy > 30) setIsExpanded(false);
+  };
+
   return (
     <div className="flex flex-col w-full md:w-96 md:h-full shrink-0 bg-white/95 dark:bg-gray-800/95 md:bg-white/80 md:dark:bg-gray-800/90 backdrop-blur-xl border-t md:border-t-0 md:border-l border-gray-200 dark:border-gray-700 shadow-[0_-8px_24px_rgba(0,0,0,0.06)] md:shadow-2xl z-30 transition-colors duration-300 rounded-t-2xl md:rounded-none">
       {/* Header */}
-      <div className="px-4 py-2 [@media(max-height:500px)]:py-1 md:p-4 border-b border-gray-100 dark:border-gray-700 flex justify-between items-center gap-3">
+      {/* Grab handle (mobile) */}
+      <div
+        className="md:hidden pt-2 -mb-1 flex justify-center"
+        onTouchStart={(e) => { sheetTouchY.current = e.touches[0].clientY; }}
+        onTouchEnd={handleSheetTouchEnd}
+        aria-hidden="true"
+      >
+        <span className="h-1 w-9 rounded-full bg-gray-300 dark:bg-gray-600" />
+      </div>
+      <div
+        className="px-4 py-2 [@media(max-height:500px)]:py-1 md:p-4 border-b border-gray-100 dark:border-gray-700 flex justify-between items-center gap-3"
+        onTouchStart={(e) => { sheetTouchY.current = e.touches[0].clientY; }}
+        onTouchEnd={handleSheetTouchEnd}
+      >
         {/* Mobile: tapping the header toggles the sheet */}
         <button
           type="button"
@@ -276,6 +300,25 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                   <ImageIcon size={16} className="mr-1" />
                   Upload
                 </Button>
+                {/* Opens the rear camera directly: photograph a paper sketch */}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() => cameraInputRef.current?.click()}
+                  title="Snap a sketch"
+                  className="md:hidden text-xs whitespace-nowrap !py-1.5 dark:text-gray-300 dark:hover:bg-gray-700"
+                >
+                  <Camera size={16} className="mr-1" />
+                  Camera
+                </Button>
+                <input
+                  type="file"
+                  ref={cameraInputRef}
+                  className="hidden"
+                  accept="image/*"
+                  capture="environment"
+                  onChange={handleFileChange}
+                />
                 <input
                   type="file"
                   ref={fileInputRef}
